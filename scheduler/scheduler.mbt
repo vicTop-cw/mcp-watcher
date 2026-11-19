@@ -85,6 +85,9 @@ pub fn attach_rules(
   records : Ref[Array[ExecRecord]],
   watch_id~ : String = "",
   registry~ : @action.InternalRegistry = @action.InternalRegistry::new(),
+  // EP-01d 共享规则表（热重载）：Some = 按同 id 的 live 版本分派（被 reload
+  // 移除的规则 no-op）；None = 静态表（v1.0 行为，位级兼容）
+  rules_ref~ : Ref[Array[@config.Rule]]? = None,
 ) -> Int32 {
   // 按优先级降序排序（高优先级先执行）
   let sorted_rules = rules
@@ -106,6 +109,24 @@ pub fn attach_rules(
         // 检查是否已退场（once 语义 / guard on_fail=stop 退场）
         if executed_rules.val.contains(rule.id) {
           return
+        }
+        // EP-01d 热重载：共享规则表存在时，取同 id 的 live 版本分派；
+        // 该规则被 reload 移除 → 本订阅 no-op
+        let live : @config.Rule? =
+          match rules_ref {
+            Some(rr) => rule_by_id(rr.val, rule.id)
+            None => Some(rule)
+          }
+        if (match live {
+          None => true
+          Some(_) => false
+        }) {
+          return
+        }
+        // 此后以 live 版本分派（遮蔽原 rule；id 相同，退场记账不受影响）
+        let rule = match live {
+          Some(l) => l
+          None => rule
         }
         let matched = @rule.dispatch([rule], fe)
         if matched.length() > 0 {
@@ -437,6 +458,15 @@ pub fn run_once(
 // ============================================================================
 
 ///|
+/// 读取并解析规则表（EP-01d 热切换数据源；reload_config 复用）
+pub fn reload_rules(rules_file : String) -> Result[Array[@config.Rule], String] {
+  match @config.Config::from_json_file(rules_file) {
+    Ok(cfg) => Ok(cfg.rules)
+    Err(e) => Err(e)
+  }
+}
+
+///|
 /// 热重载配置
 ///
 /// 参数：
@@ -444,8 +474,8 @@ pub fn run_once(
 ///
 /// 返回：重载结果（成功/失败 + 规则数）
 pub fn reload_config(rules_file : String) -> ReloadResult {
-  match @config.Config::from_json_file(rules_file) {
-    Ok(cfg) => ReloadResult::new(true, cfg.rules.length(), "")
+  match reload_rules(rules_file) {
+    Ok(rules) => ReloadResult::new(true, rules.length(), "")
     Err(e) => ReloadResult::new(false, 0, e)
   }
 }
@@ -498,6 +528,9 @@ pub struct WatcherState {
   paused : Ref[Bool]
   /// 生命周期事件累加器（log_event op 落此；可测试断言，未来接 EventBus 发布）
   lifecycle_events : Ref[Array[@action.LifecycleEvent]]
+  /// EP-01d 共享规则表（daemon 传 live 表；reload op 成功时热切换；
+  /// attach_rules 按 id 分派 live 版本；None = 无热切换能力，仅报告）
+  rules_ref : Ref[Array[@config.Rule]]?
 }
 
 ///|
@@ -506,6 +539,7 @@ pub fn WatcherState::new(
   rules_file : String,
   watch_id : String,
   watch_dir : String,
+  rules_ref~ : Ref[Array[@config.Rule]]? = None,
 ) -> WatcherState {
   {
     rules_file,
@@ -513,6 +547,7 @@ pub fn WatcherState::new(
     watch_dir,
     paused: Ref::Ref(false),
     lifecycle_events: Ref::Ref([]),
+    rules_ref,
   }
 }
 
@@ -529,17 +564,30 @@ pub fn build_internal_registry(state : WatcherState) -> @action.InternalRegistry
   reg.register(
     "reload_config",
     fn(_spec : @config.ActionSpec, _ev : @watch.FsEvent, _d : String) {
-      let r = reload_config(state.rules_file)
-      if r.ok {
-        @action.ActionOutcome::new(
-          "internal", true, 0,
-          "reload ok rules=" + r.rule_count.to_string(),
-          "",
-        )
-      } else {
-        @action.ActionOutcome::new(
-          "internal", false, -1, "", "热重载失败: " + r.error,
-        )
+      match reload_rules(state.rules_file) {
+        Ok(rules) => {
+          let count = rules.length()
+          match state.rules_ref {
+            Some(rr) => {
+              rr.val = rules
+              @action.ActionOutcome::new(
+                "internal", true, 0,
+                "reload ok rules=" + count.to_string() + "（规则表已热切换）",
+                "",
+              )
+            }
+            None =>
+              @action.ActionOutcome::new(
+                "internal", true, 0,
+                "reload ok rules=" + count.to_string(),
+                "",
+              )
+          }
+        }
+        Err(e) =>
+          @action.ActionOutcome::new(
+            "internal", false, -1, "", "热重载失败: " + e,
+          )
       }
     },
   )
@@ -586,4 +634,224 @@ pub fn build_internal_registry(state : WatcherState) -> @action.InternalRegistry
     },
   )
   reg
+}
+
+// ============================================================================
+// EP-01d  rules_file 变更热重载
+// ============================================================================
+//
+// 链路：bus(create.*/modify.*) → 路径匹配 → RulesFileDebounce（防抖状态机）
+//       → @rx.timer 一次性定时器（每事件重武装；rx 无取消 API，靠「只有
+//         最后武装的定时器可能满足 due」天然合并，突发至多触发一次）
+//       → internal 通道 reload_config op → rules_ref 热切换。
+//
+// 前提：daemon 已安装并驱动真实时钟（install_real_clock + drive_real_clock，
+// 见 main.mbt run_daemon）；测试走 install_real_clock_with + real_clock_tick
+// 的确定性路径（见 reload_test.mbt）。
+
+///|
+/// 从规则表按 id 找规则（EP-01d 热重载；core Array 无 find，手写查找）
+fn rule_by_id(rules : Array[@config.Rule], id : String) -> @config.Rule? {
+  let mut i = 0
+  while i < rules.length() {
+    if rules[i].id == id {
+      return Some(rules[i])
+    }
+    i = i + 1
+  }
+  None
+}
+
+///|
+/// 规则文件变更防抖状态机（纯逻辑，假时钟可测）
+pub struct RulesFileDebounce {
+  pending : Ref[Bool]
+  last_event : Ref[Int64]
+}
+
+///|
+pub fn RulesFileDebounce::new() -> RulesFileDebounce {
+  { pending: Ref::Ref(false), last_event: Ref::Ref(0L) }
+}
+
+///|
+/// 记录一次 rules_file 变更事件（突发内重复记录；last_event 更新为最新）
+pub fn RulesFileDebounce::record(
+  self : RulesFileDebounce,
+  now_ms : Int64,
+) -> Unit {
+  self.pending.val = true
+  self.last_event.val = now_ms
+}
+
+///|
+/// 是否到点触发：存在 pending 事件且静默窗口（自最新事件起）已过
+pub fn RulesFileDebounce::due(
+  self : RulesFileDebounce,
+  now_ms : Int64,
+  window_ms : Int64,
+) -> Bool {
+  self.pending.val && (now_ms - self.last_event.val >= window_ms)
+}
+
+///|
+/// 触发后清除 pending（调用方在执行 reload 前后调用）
+pub fn RulesFileDebounce::fire(self : RulesFileDebounce) -> Unit {
+  self.pending.val = false
+}
+
+///|
+/// 反斜杠归一为正斜杠（Windows / POSIX 两种路径形态统一比较）
+fn normalize_slashes(p : String) -> String {
+  let a = p.to_array()
+  let n = a.length()
+  let mut i = 0
+  let mut out = ""
+  while i < n {
+    let c = a[i]
+    if c == '\\' {
+      out = out + "/"
+    } else {
+      out = out + c.to_string()
+    }
+    i = i + 1
+  }
+  out
+}
+
+///|
+/// 路径匹配：归一后精确相等或「/」分段后缀匹配（覆盖「监控根相对路径」与
+/// 「绝对路径」两种事件形态；不做 basename 匹配，避免异目录假阳）
+pub fn rules_file_event_match(ev_path : String, rules_file : String) -> Bool {
+  let a = normalize_slashes(ev_path)
+  let b = normalize_slashes(rules_file)
+  if a == b {
+    true
+  } else if a.has_suffix("/" + b) {
+    true
+  } else if b.has_suffix("/" + a) {
+    true
+  } else {
+    false
+  }
+}
+
+///|
+/// 是否为 reload 触发事件类型（文件被写入或新出现；delete/rename 不触发）
+pub fn is_reload_trigger(ev : @watch.FsEvent) -> Bool {
+  match ev.event_type {
+    @config.EventType::Modify | @config.EventType::Create => true
+    _ => false
+  }
+}
+
+///|
+/// 规则文件所在目录（"a/b/rules.json" → "a/b"；"rules.json" → "."）
+pub fn rules_file_dir(path : String) -> String {
+  let a = normalize_slashes(path)
+  let arr = a.to_array()
+  let n = arr.length()
+  let mut i = n
+  while i > 0 {
+    i = i - 1
+    if arr[i] == '/' {
+      let mut out = ""
+      let mut j = 0
+      while j < i {
+        out = out + arr[j].to_string()
+        j = j + 1
+      }
+      return out
+    }
+  }
+  "."
+}
+
+///|
+/// 外层目录是否覆盖内层目录（归一后：根「.」覆盖一切；相等；或内层为
+/// 外层的「/」分段前缀）
+pub fn dir_covers(outer : String, inner : String) -> Bool {
+  let o = normalize_slashes(outer)
+  let i2 = normalize_slashes(inner)
+  if o == "." || o == "" {
+    true
+  } else if o == i2 {
+    true
+  } else if i2.starts_with(o + "/") {
+    true
+  } else {
+    false
+  }
+}
+
+///|
+/// 经 EP-01a internal 通道触发规则重载（reload_config op）；结果落 log
+///（可诊断）；op 未注册 → 诊断日志（不抛异常）
+pub fn fire_rules_reload(
+  registry : @action.InternalRegistry,
+  state : WatcherState,
+  ev : @watch.FsEvent,
+  log : Ref[Array[String]],
+) -> Unit {
+  let spec = @config.ActionSpec::new_internal("reload_config", None)
+  match registry.lookup("reload_config") {
+    Some(handler) => {
+      let outcome = handler(spec, ev, state.watch_dir)
+      if outcome.ok {
+        log.val.push("rules_file reload ok: " + outcome.stdout)
+        println("[reload] " + outcome.stdout)
+      } else {
+        log.val.push("rules_file reload err: " + outcome.stderr)
+        println("[reload] ⚠️ " + outcome.stderr)
+      }
+    }
+    None => {
+      log.val.push("rules_file reload: internal op reload_config 未注册")
+      println("[reload] ⚠️ internal op reload_config 未注册，跳过热重载")
+    }
+  }
+}
+
+///|
+/// 订阅 rules_file 变更热重载（EP-01d）
+///
+/// bus 事件（create.*/modify.*）→ 路径匹配 → 防抖状态机 record →
+/// 一次性 @rx.timer（每事件重武装；无取消 API 下「只有最后武装的定时器
+/// 可能满足 due」，突发至多触发一次——先前武装的定时器到点时 due 不成立
+/// 而自然作废）。到点：经 internal 通道 fire reload（fire_rules_reload）。
+///
+/// 前提：真实时钟已安装并被驱动（daemon：install_real_clock +
+/// drive_real_clock；测试：install_real_clock_with + real_clock_tick）。
+///
+/// 返回订阅数（2：create.* + modify.*）。
+pub fn attach_rules_file_reload(
+  bus : @rx.EventBus[@watch.FsEvent],
+  state : WatcherState,
+  registry : @action.InternalRegistry,
+  window_ms : Int64,
+  log : Ref[Array[String]],
+) -> Int32 {
+  let d = RulesFileDebounce::new()
+  let handler = fn(ev : @rx.TriggerEvent[@watch.FsEvent]) {
+    let fe = ev.payload
+    if state.paused.val {
+      return
+    }
+    if !is_reload_trigger(fe) {
+      return
+    }
+    if !rules_file_event_match(fe.path, state.rules_file) {
+      return
+    }
+    d.record(@rx.real_now())
+    let _ = @rx.timer(window_ms).subscribe_on_next(fn(_t : Int64) {
+      if d.due(@rx.real_now(), window_ms) {
+        d.fire()
+        fire_rules_reload(registry, state, fe, log)
+      }
+    })
+  }
+  let _n1 = bus.subscribe("create.*", handler)
+  let _n2 = bus.subscribe("modify.*", handler)
+  2
 }

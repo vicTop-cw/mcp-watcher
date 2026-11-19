@@ -213,8 +213,11 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
   let records : Ref[Array[@scheduler.ExecRecord]] = Ref::Ref([])
   let policy = @action.build_policy(@scheduler.allowed_programs(cfg))
   // EP-01a：internal 动作上下文（reload_config 复用 CLI reload 通道；
-  // paused 门控共享给 watch 订阅）
-  let state = @scheduler.WatcherState::new(args.rules, cfg.watch_id, cfg.watch_dir)
+  // paused 门控共享给 watch 订阅）；EP-01d：共享规则表（热切换）
+  let rules_ref = Ref::Ref(cfg.rules)
+  let state = @scheduler.WatcherState::new(
+    args.rules, cfg.watch_id, cfg.watch_dir, rules_ref=Some(rules_ref),
+  )
   let reg = @scheduler.build_internal_registry(state)
   let n = @scheduler.attach_rules(
     cfg.rules,
@@ -226,8 +229,22 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
     records,
     watch_id=cfg.watch_id,
     registry=reg,
+    rules_ref=Some(rules_ref),
   )
   println("  已注册订阅：" + n.to_string())
+
+  // EP-01d：rules_file 变更 → 防抖 → internal reload_config 热重载。
+  // 防抖窗口 = 配置 debounce_ms；为 0 时取 300ms 保底防抖（编辑器保存
+  // 突发必须合并，防每事件一次 reload）
+  let reload_window = if cfg.debounce_ms > 0 {
+    cfg.debounce_ms.to_int64()
+  } else {
+    300L
+  }
+  let nrl = @scheduler.attach_rules_file_reload(
+    bus, state, reg, reload_window, log,
+  )
+  println("  rules_file 热重载订阅：" + nrl.to_string())
 
   // 创建就绪哨兵文件（test-mode）
   if args.ready != "" {
@@ -269,6 +286,25 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
   }
   // 后台监控任务（rx 订阅同步阻塞，必须放独立 async 任务）
   @async.with_task_group(fn(group : @async.TaskGroup) {
+    // EP-01d：真实时钟驱动——rx 时间算子（debounce_real / timer）在真实
+    // 时钟安装**并被驱动**后才按真实时间运行；缺驱动则 watch 防抖永不
+    // 触发（潜在缺陷顺带修复）
+    let _ = group.spawn(fn() {
+      @rx.drive_real_clock(100)
+    })
+    // 规则文件可能在 watch_dir 之外：目录未被主监控覆盖时补一个监控
+    // （仅顶层；事件进同一 bus，由路径匹配过滤）
+    let rules_dir = @scheduler.rules_file_dir(args.rules)
+    if !@scheduler.dir_covers(cfg.watch_dir, rules_dir) {
+      let _ = group.spawn(fn() {
+        @watch.spawn_watch_task(
+          rules_dir, false, bus,
+          debounce_ms=cfg.debounce_ms.to_int64(),
+          paused=state.paused,
+        )
+      })
+      println("  规则文件在主监控目录外，已补监控：" + rules_dir)
+    }
     let _ = group.spawn(fn() {
       @watch.spawn_watch_task(
         cfg.watch_dir,

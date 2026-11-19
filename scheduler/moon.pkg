@@ -19,5 +19,7 @@ options(
   targets: {
     "guard_native_test.mbt": [ "native" ],
     "internal_wiring_test.mbt": [ "native" ],
+    // EP-01d：真实文件热切换验收需 @mon.fs_write_atomic（native C FFI）
+    "reload_native_test.mbt": [ "native" ],
   },
 )
