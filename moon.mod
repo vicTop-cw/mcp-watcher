@@ -1,5 +1,5 @@
 name = "mcp-watcher"
-version = "0.1.0"
+version = "0.2.0"
 
 import {
   "vicTop-cw/RX-MBT@0.4.5",
