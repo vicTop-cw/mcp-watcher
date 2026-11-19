@@ -156,6 +156,94 @@ fn parse_acceptance(v : Json?) -> Result[AcceptanceSpec?, String] {
 }
 
 ///|
+/// ASCII 大写（MoonBit core 无公开 case API；字符字面量映射，仅处理 a-z）
+fn upper_ascii(s : String) -> String {
+  let mut out = ""
+  for ch in s {
+    out = out + upper_char(ch).to_string()
+  }
+  out
+}
+
+///|
+/// ASCII 小写（MoonBit core 无公开 case API；字符字面量映射，仅处理 A-Z）
+fn lower_ascii(s : String) -> String {
+  let mut out = ""
+  for ch in s {
+    out = out + lower_char(ch).to_string()
+  }
+  out
+}
+
+///|
+/// 单字符大写（字面量映射，不依赖 Char 构造 API）
+fn upper_char(c : Char) -> Char {
+  match c {
+    'a' => 'A'
+    'b' => 'B'
+    'c' => 'C'
+    'd' => 'D'
+    'e' => 'E'
+    'f' => 'F'
+    'g' => 'G'
+    'h' => 'H'
+    'i' => 'I'
+    'j' => 'J'
+    'k' => 'K'
+    'l' => 'L'
+    'm' => 'M'
+    'n' => 'N'
+    'o' => 'O'
+    'p' => 'P'
+    'q' => 'Q'
+    'r' => 'R'
+    's' => 'S'
+    't' => 'T'
+    'u' => 'U'
+    'v' => 'V'
+    'w' => 'W'
+    'x' => 'X'
+    'y' => 'Y'
+    'z' => 'Z'
+    _ => c
+  }
+}
+
+///|
+/// 单字符小写（字面量映射，不依赖 Char 构造 API）
+fn lower_char(c : Char) -> Char {
+  match c {
+    'A' => 'a'
+    'B' => 'b'
+    'C' => 'c'
+    'D' => 'd'
+    'E' => 'e'
+    'F' => 'f'
+    'G' => 'g'
+    'H' => 'h'
+    'I' => 'i'
+    'J' => 'j'
+    'K' => 'k'
+    'L' => 'l'
+    'M' => 'm'
+    'N' => 'n'
+    'O' => 'o'
+    'P' => 'p'
+    'Q' => 'q'
+    'R' => 'r'
+    'S' => 's'
+    'T' => 't'
+    'U' => 'u'
+    'V' => 'v'
+    'W' => 'w'
+    'X' => 'x'
+    'Y' => 'y'
+    'Z' => 'z'
+    _ => c
+  }
+}
+
+///|
 /// 解析动作规格
 fn parse_action(v : Json) -> Result[ActionSpec, String] {
   match v {
@@ -231,7 +319,120 @@ fn parse_action(v : Json) -> Result[ActionSpec, String] {
           _ => ()
         }
       }
-      Ok({ kind, argv, target, body, ttl, cleanup, acceptance, op, message, })
+      // EP-01b/c：webhook / mcp_tool_call 字段（fail-closed；schema §5）
+      // ⚠️ 按 kind 解析：command 动作的 schema 字段也叫 `args`，若不分 kind，
+      //    v1.0 command 的 `args` 会漏进 mcp_args_json（破坏向后兼容）。
+      let url = if kind == "webhook" {
+        jstr(m.get("url"))
+      } else {
+        None
+      }
+      let method_raw = if kind == "webhook" {
+        jstr(m.get("method"))
+      } else {
+        None
+      }
+      let headers_json = if kind == "webhook" {
+        match m.get("headers") {
+          Some(hj) => Some(@json.Json::stringify(hj))
+          None => None
+        }
+      } else {
+        None
+      }
+      // timeout_ms 为通用字段（command/webhook/mcp 均可用），不分 kind 解析
+      let timeout_ms = match jint(m.get("timeout_ms")) {
+        Some(t) => t
+        None => 5000
+      }
+      let server = if kind == "mcp_tool_call" {
+        jstr(m.get("server"))
+      } else {
+        None
+      }
+      let mcp_args_json = if kind == "mcp_tool_call" {
+        match m.get("args") {
+          Some(aj) => Some(@json.Json::stringify(aj))
+          None => None
+        }
+      } else {
+        None
+      }
+      let transport_raw = if kind == "mcp_tool_call" {
+        jstr(m.get("transport"))
+      } else {
+        None
+      }
+      let mcp_tool = if kind == "mcp_tool_call" {
+        jstr(m.get("tool"))
+      } else {
+        None
+      }
+      let mut http_method = method_raw
+      let mut target_final = target
+      let mut transport_final : String? = None
+      if kind == "webhook" {
+        match url {
+          Some(u) if u != "" => ()
+          _ => return Err("webhook 动作缺少必填字段 url（或为空）")
+        }
+        http_method = match method_raw {
+          Some(mr) => {
+            let up = upper_ascii(mr)
+            if up == "GET" || up == "POST" {
+              Some(up)
+            } else {
+              return Err("webhook.method 必须是 GET 或 POST（当前: " + mr + "）")
+            }
+          }
+          None => Some("POST")
+        }
+      }
+      if kind == "mcp_tool_call" {
+        match server {
+          Some(s) if s != "" => ()
+          _ =>
+            return Err(
+              "mcp_tool_call 动作缺少必填字段 server（或为空）",
+            )
+        }
+        match mcp_tool {
+          Some(t) if t != "" => target_final = Some(t)
+          _ =>
+            return Err(
+              "mcp_tool_call 动作缺少必填字段 tool（或为空）",
+            )
+        }
+        transport_final = match transport_raw {
+          Some(tr) => {
+            let tl = lower_ascii(tr)
+            if tl == "stdio" || tl == "sse" || tl == "http" {
+              Some(tl)
+            } else {
+              return Err("mcp_tool_call.transport 必须是 stdio/sse/http（当前: " + tl + "）")
+            }
+          }
+          None => Some("stdio")
+        }
+      }
+      Ok({
+        kind,
+        argv,
+        target: target_final,
+        body,
+        ttl,
+        cleanup,
+        acceptance,
+        op,
+        message,
+        url,
+        http_method,
+        headers_json,
+        timeout_ms,
+        server,
+        mcp_args_json,
+        transport: transport_final,
+      })
     }
     _ => Err("动作必须是 JSON 对象")
   }

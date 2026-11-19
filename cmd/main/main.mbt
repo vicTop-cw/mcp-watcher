@@ -224,6 +224,7 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
     cfg.logging,
     log,
     records,
+    watch_id=cfg.watch_id,
     registry=reg,
   )
   println("  已注册订阅：" + n.to_string())
@@ -786,6 +787,7 @@ async fn cmd_run_once(args : CliArgs) -> Unit {
     cfg.logging,
     log,
     records,
+    watch_id=cfg.watch_id,
     registry=reg,
   )
   println("  已注册订阅：" + n.to_string())

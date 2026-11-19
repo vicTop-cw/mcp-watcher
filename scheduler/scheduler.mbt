@@ -83,6 +83,7 @@ pub fn attach_rules(
   logging_config : @config.LoggingConfig,
   log : Ref[Array[String]],
   records : Ref[Array[ExecRecord]],
+  watch_id~ : String = "",
   registry~ : @action.InternalRegistry = @action.InternalRegistry::new(),
 ) -> Int32 {
   // 按优先级降序排序（高优先级先执行）
@@ -142,7 +143,8 @@ pub fn attach_rules(
           }
           if proceed {
             exec_actions(
-              rule, fe, policy, logging_config, watch_dir, log, records, registry,
+              rule, fe, policy, logging_config, watch_dir, watch_id,
+              log, records, registry,
             )
             // 记录已执行（once 语义）
             if rule.stop_after {
@@ -168,12 +170,16 @@ fn exec_actions(
   policy : @rt.ExecPolicy,
   logging_config : @config.LoggingConfig,
   watch_dir : String,
+  watch_id : String,
   log : Ref[Array[String]],
   records : Ref[Array[ExecRecord]],
   registry : @action.InternalRegistry,
 ) -> Unit {
   for a in rule.actions {
-    match @action.run_action(a, fe, policy, logging_config, watch_dir, registry=registry) {
+    match @action.run_action(
+      a, fe, policy, logging_config, watch_dir, watch_id=watch_id,
+      registry=registry,
+    ) {
       Ok(o) => {
         if o.accepted {
           log.val.push(
@@ -370,6 +376,7 @@ pub fn run_once(
   policy : @rt.ExecPolicy,
   logging_config : @config.LoggingConfig,
   watch_dir : String,
+  watch_id~ : String = "",
   registry~ : @action.InternalRegistry = @action.InternalRegistry::new(),
 ) -> Array[String] {
   let matched = @rule.dispatch(rules, ev)
@@ -393,7 +400,10 @@ pub fn run_once(
     }
     if proceed {
       for a in r.actions {
-        match @action.run_action(a, ev, policy, logging_config, watch_dir, registry=registry) {
+        match @action.run_action(
+          a, ev, policy, logging_config, watch_dir, watch_id=watch_id,
+          registry=registry,
+        ) {
           Ok(o) =>
             if o.accepted {
               log.push(

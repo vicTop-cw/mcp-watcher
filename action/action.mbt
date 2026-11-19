@@ -1001,6 +1001,7 @@ pub fn run_internal_action(
 ///   policy - 执行策略（command 动作用；其他动作忽略）
 ///   logging_config - 日志配置（用于控制日志输出）
 ///   watch_dir - 监控根目录（acceptance.artifact_glob 相对它解析）
+///   watch_id  - 实例 id（webhook/mcp 的 {watch_id} §7 占位符展开；缺省 ""）
 ///   registry - internal 动作注册表（EP-01a；缺省空注册表 ⇒ internal 报未注册）
 ///
 /// 返回契约（v1.1）：
@@ -1014,6 +1015,7 @@ pub fn run_action(
   policy : @rt.ExecPolicy,
   logging_config : @config.LoggingConfig,
   watch_dir : String,
+  watch_id~ : String = "",
   registry~ : InternalRegistry = InternalRegistry::new(),
 ) -> Result[ActionOutcome, String] {
   // 记录执行开始时间
@@ -1047,10 +1049,14 @@ pub fn run_action(
       Err(
         "action mcp_tool_call 待实现（EP-01 动作扩展）：需要 MCP 客户端接入",
       )
-    "webhook" =>
-      Err(
-        "action webhook 待实现（EP-01 动作扩展）：需要 HTTP 客户端接入",
-      )
+    "webhook" => {
+      let outcome = run_webhook_action(spec, ev, watch_dir, watch_id)
+      if outcome.ok {
+        Ok(outcome)
+      } else {
+        Err(outcome.stderr)
+      }
+    }
     "internal" => run_internal_action(registry, spec, ev, watch_dir)
     other => Err("未知 action kind: " + other)
   }

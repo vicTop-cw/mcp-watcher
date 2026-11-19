@@ -189,6 +189,21 @@ pub(all) struct ActionSpec {
   op : String?
   /// internal log_event 的日志消息（支持 schema §7 占位符；仅 internal）
   message : String?
+  /// webhook: 目标 URL（schema §5；运行时按 §7 占位符展开）
+  url : String?
+  /// webhook: GET / POST（缺省 POST；解析层已归一为大写）
+  /// 注：字段名 http_method（method 为 MoonBit 保留字）
+  http_method : String?
+  /// webhook: 附加请求头（原始 JSON object 文本；None = 无附加头）
+  headers_json : String?
+  /// webhook / mcp_tool_call: 超时（毫秒，缺省 5000）
+  timeout_ms : Int32
+  /// mcp_tool_call: server 程序名（进 allowed_programs 白名单）
+  server : String?
+  /// mcp_tool_call: 工具调用 args（原始 JSON object 文本；运行时按 §7 占位符展开）
+  mcp_args_json : String?
+  /// mcp_tool_call: transport stdio / sse / http（缺省 stdio）
+  transport : String?
 }
 
 ///|
@@ -209,6 +224,66 @@ pub fn ActionSpec::new(
   {
     kind, argv, target, body, ttl: 0, cleanup: "trash",
     acceptance, op: None, message: None,
+    url: None, http_method: None, headers_json: None, timeout_ms: 5000,
+    server: None, mcp_args_json: None, transport: None,
+  }
+}
+
+///|
+/// 构造 webhook 动作规格（EP-01b · schema §5）
+pub fn ActionSpec::new_webhook(
+  url : String,
+  http_method : String?,
+  headers_json : String?,
+  body : String?,
+  timeout_ms : Int32,
+) -> ActionSpec {
+  {
+    kind: "webhook",
+    argv: None,
+    target: None,
+    body,
+    ttl: 0,
+    cleanup: "trash",
+    acceptance: None,
+    op: None,
+    message: None,
+    url: Some(url),
+    http_method,
+    headers_json,
+    timeout_ms,
+    server: None,
+    mcp_args_json: None,
+    transport: None,
+  }
+}
+
+///|
+/// 构造 mcp_tool_call 动作规格（EP-01c · schema §5；tool 复用 target 字段）
+pub fn ActionSpec::new_mcp(
+  server : String,
+  tool : String,
+  mcp_args_json : String?,
+  transport : String?,
+  timeout_ms : Int32,
+) -> ActionSpec {
+  {
+    kind: "mcp_tool_call",
+    argv: None,
+    target: Some(tool),
+    body: None,
+    ttl: 0,
+    cleanup: "trash",
+    acceptance: None,
+    op: None,
+    message: None,
+    url: None,
+    http_method: None,
+    headers_json: None,
+    timeout_ms,
+    server: Some(server),
+    mcp_args_json,
+    transport,
   }
 }
 
@@ -225,6 +300,13 @@ pub fn ActionSpec::new_internal(op : String, message : String?) -> ActionSpec {
     acceptance: None,
     op: Some(op),
     message,
+    url: None,
+    http_method: None,
+    headers_json: None,
+    timeout_ms: 5000,
+    server: None,
+    mcp_args_json: None,
+    transport: None,
   }
 }
 

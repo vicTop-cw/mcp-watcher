@@ -27,6 +27,9 @@ options(
     "trash_native.mbt": [ "native" ],
     "trash_native_test.mbt": [ "native" ],
     "trash_stub.mbt": [ "js", "wasm" ],
+    // EP-01b webhook：js 目标真实 HTTP e2e / native 目标诚实降级
+    "webhook_js_test.mbt": [ "js" ],
+    "webhook_native_test.mbt": [ "native" ],
   },
   "native-stub": [ "fs_list_stub.c" ],
   "allow-experimental-packages": [ "moonbitlang/core/async" ],
