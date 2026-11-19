@@ -1,0 +1,1 @@
+{"schema_version":1,"watch_id":"test","watch_dir":".","rules":[{"id":"r1","events":["create"],"patterns":["**/*"],"actions":[{"kind":"command","argv":["echo","test"]}]}]}

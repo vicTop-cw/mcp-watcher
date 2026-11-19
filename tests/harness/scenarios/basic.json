@@ -1,0 +1,14 @@
+{
+  "name": "basic",
+  "description": "创建 .tmp 临时文件，期望 server 的 cleanup 规则以 command 动作将其删除；创建 .md 并追加内容，期望 md-modify 规则以 command 动作响应。",
+  "ops": [
+    { "op": "create", "path": "scratch.tmp", "content": "drop me" },
+    { "op": "sleep", "ms": 80 },
+    { "op": "create", "path": "keep.md", "content": "# keep" },
+    { "op": "modify", "path": "keep.md", "content": "\nappended", "append": true }
+  ],
+  "expect": [
+    { "rule_id": "cleanup", "event": "create", "action_type": "command", "path": "scratch.tmp", "exit": 0, "stdout": { "$contains": "cleanup" } },
+    { "rule_id": "md-modify", "event": "modify", "action_type": "command", "path": "keep.md", "exit": 0, "stdout": { "$contains": "md-modify" } }
+  ]
+}

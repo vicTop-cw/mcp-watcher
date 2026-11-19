@@ -1,0 +1,595 @@
+// ============================================================================
+// config · 解析与校验（手动提取，与 rx-mbt 同范式；累积式校验）
+// ============================================================================
+
+///|
+/// 取 JSON 对象里的字段
+fn jget(v : Json, key : String) -> Json? {
+  match v {
+    Object(m) => m.get(key)
+    _ => None
+  }
+}
+
+///|
+/// JSON 值 → 字符串
+fn jstr(v : Json?) -> String? {
+  match v {
+    Some(String(s)) => Some(s)
+    _ => None
+  }
+}
+
+///|
+/// JSON 值 → 布尔
+fn jbool(v : Json?) -> Bool? {
+  match v {
+    Some(True) => Some(true)
+    Some(False) => Some(false)
+    _ => None
+  }
+}
+
+///|
+/// JSON 值 → 整数（JSON 数字为 Double，转 Int）
+fn jint(v : Json?) -> Int32? {
+  match v {
+    Some(Number(n, ..)) => Some(n.to_int())
+    _ => None
+  }
+}
+
+///|
+/// JSON 值 → 字符串数组
+fn jstr_array(v : Json?) -> Array[String] {
+  let out : Array[String] = []
+  match v {
+    Some(Array(items)) =>
+      for it in items {
+        match it {
+          String(s) => out.push(s)
+          _ => ()
+        }
+      }
+    _ => ()
+  }
+  out
+}
+
+///|
+/// 解析条件规格
+fn parse_condition(v : Json?) -> ConditionSpec? {
+  match v {
+    Some(Object(m)) => {
+      let kind = match jstr(m.get("kind")) {
+        Some(k) => k
+        None => ""
+      }
+      let expr = match jstr(m.get("expr")) {
+        Some(e) => e
+        None => ""
+      }
+      Some({ kind, expr, })
+    }
+    _ => None
+  }
+}
+
+///|
+/// 解析动作规格
+fn parse_action(v : Json) -> Result[ActionSpec, String] {
+  match v {
+    Object(m) => {
+      let kind = match jstr(m.get("kind")) {
+        Some(k) => k
+        None =>
+          match jstr(m.get("type")) {
+            Some(t) => t
+            None => return Err("动作缺少 kind/type")
+          }
+      }
+      let argv = match m.get("argv") {
+        Some(Array(items)) => {
+          let a : Array[String] = []
+          for it in items {
+            match it {
+              String(s) => {
+                if s == "" {
+                  return Err("动作 argv 元素不能为空")
+                }
+                a.push(s)
+              }
+              _ => ()
+            }
+          }
+          Some(a)
+        }
+        _ => None
+      }
+      let target = jstr(m.get("target"))
+      let body = jstr(m.get("body"))
+      let ttl = match jint(m.get("ttl")) {
+        Some(t) => t
+        None => 0
+      }
+      let cleanup = match jstr(m.get("cleanup")) {
+        Some(c) => c
+        None => "trash"
+      }
+      Ok({ kind, argv, target, body, ttl, cleanup, })
+    }
+    _ => Err("动作必须是 JSON 对象")
+  }
+}
+
+///|
+/// 解析单条规则
+fn parse_rule(v : Json) -> Result[Rule, String] {
+  match v {
+    Object(m) => {
+      let id = match jstr(m.get("id")) {
+        Some(x) => x
+        None => ""
+      }
+      let events = jstr_array(m.get("events"))
+      // 验证事件类型
+      for e in events {
+        match EventType::from_string(e) {
+          Some(_) => ()
+          None =>
+            return Err("规则 " + id + ": 无效的事件类型 '" + e + "'")
+        }
+      }
+      let patterns = jstr_array(m.get("patterns"))
+      // 验证 glob 模式（非空）
+      for p in patterns {
+        if p == "" {
+          return Err("规则 " + id + ": 空的 glob 模式")
+        }
+      }
+      let exclude = jstr_array(m.get("exclude"))
+      let condition = parse_condition(m.get("condition"))
+      let actions : Array[ActionSpec] = []
+      match m.get("actions") {
+        Some(Array(items)) =>
+          for it in items {
+            match parse_action(it) {
+              Ok(a) => actions.push(a)
+              Err(e) => return Err("规则 " + id + ": " + e)
+            }
+          }
+        _ => ()
+      }
+      let stop_after = match jbool(m.get("stop_after")) {
+        Some(b) => b
+        None => false
+      }
+      let priority = match jint(m.get("priority")) {
+        Some(p) => p
+        None => 0
+      }
+      Ok({
+        id,
+        events,
+        patterns,
+        exclude,
+        condition,
+        actions,
+        stop_after,
+        priority,
+      })
+    }
+    _ => Err("规则必须是 JSON 对象")
+  }
+}
+
+///|
+/// 解析日志配置
+fn parse_logging_config(v : Json?) -> LoggingConfig {
+  match v {
+    Some(Object(m)) => {
+      let enabled = match jbool(m.get("enabled")) {
+        Some(b) => b
+        None => true
+      }
+      let log_dir = match jstr(m.get("log_dir")) {
+        Some(d) => d
+        None => ""
+      }
+      let log_file = match jstr(m.get("log_file")) {
+        Some(f) => f
+        None => "mcp-watcher.log"
+      }
+      { enabled, log_dir, log_file, }
+    }
+    _ => LoggingConfig::new()
+  }
+}
+
+///|
+/// 检测两个模式数组是否有重叠
+fn has_overlap(patterns1 : Array[String], patterns2 : Array[String]) -> Bool {
+  for p1 in patterns1 {
+    for p2 in patterns2 {
+      if p1 == p2 {
+        return true
+      }
+    }
+  }
+  false
+}
+
+///|
+/// 检测两个事件数组是否有重叠
+fn has_event_overlap(events1 : Array[String], events2 : Array[String]) -> Bool {
+  for e1 in events1 {
+    for e2 in events2 {
+      if e1 == "all" || e2 == "all" || e1 == e2 {
+        return true
+      }
+    }
+  }
+  false
+}
+
+///|
+/// 检测规则冲突（警告级别，不阻止配置加载）
+///
+/// 冲突类型：
+///   1. 模式重叠：两个规则匹配同一个文件模式
+///   2. 事件类型冲突：两个规则监听相同事件类型
+///   3. 优先级冲突：高优先级规则会先执行
+///   4. 动作冲突：两个规则执行相同动作
+fn detect_conflicts(rules : Array[Rule]) -> Array[String] {
+  let conflicts : Array[String] = []
+  let n = rules.length()
+  for i in 0..<n {
+    for j in (i + 1)..<n {
+      let r1 = rules.at(i)
+      let r2 = rules.at(j)
+
+      // 检测模式重叠
+      if has_overlap(r1.patterns, r2.patterns) {
+        // 检测事件类型冲突
+        if has_event_overlap(r1.events, r2.events) {
+          conflicts.push(
+            "⚠️ 规则冲突: '" +
+            r1.id +
+            "' 与 '" +
+            r2.id +
+            "' 有重叠的模式和事件类型",
+          )
+
+          // 检测优先级差异
+          if r1.priority != r2.priority {
+            let level1 = PriorityLevel::from_priority(r1.priority)
+            let level2 = PriorityLevel::from_priority(r2.priority)
+            let higher = if r1.priority > r2.priority { r1.id } else { r2.id }
+            let lower = if r1.priority > r2.priority { r2.id } else { r1.id }
+            let higher_level = if r1.priority > r2.priority {
+              level1
+            } else {
+              level2
+            }
+            let lower_level = if r1.priority > r2.priority {
+              level2
+            } else {
+              level1
+            }
+
+            conflicts.push(
+              "   📊 优先级: '" +
+              higher +
+              "' (" +
+              higher_level.to_string() +
+              ") 会先执行 '" +
+              lower +
+              "' (" +
+              lower_level.to_string() +
+              ")",
+            )
+
+            // 如果优先级差异较大，给出建议
+            let diff = r1.priority - r2.priority
+            if diff.abs() >= 50 {
+              conflicts.push(
+                "   💡 建议: 优先级差异较大 (" +
+                diff.abs().to_string() +
+                " 点)，确认是否期望此顺序",
+              )
+            }
+          } else {
+            conflicts.push(
+              "   ⚠️ 注意: 两个规则优先级相同，执行顺序不确定",
+            )
+          }
+
+          // 检测动作冲突
+          if has_same_actions(r1.actions, r2.actions) {
+            conflicts.push(
+              "   🔄 动作冲突: 两个规则执行相同动作，可能产生重复效果",
+            )
+          }
+        }
+      }
+
+      // 检测 exclude 冲突
+      if has_exclude_conflict(r1, r2) {
+        conflicts.push(
+          "⚠️ 排除冲突: '" +
+          r1.id +
+          "' 的 exclude 可能影响 '" +
+          r2.id +
+          "' 的匹配",
+        )
+      }
+    }
+  }
+  conflicts
+}
+
+///|
+/// 检测两个规则是否有相同动作
+fn has_same_actions(
+  actions1 : Array[ActionSpec],
+  actions2 : Array[ActionSpec],
+) -> Bool {
+  for a1 in actions1 {
+    for a2 in actions2 {
+      if a1.kind == a2.kind {
+        // 对于 command 动作，检查 argv 是否相同
+        if a1.kind == "command" {
+          match (a1.argv, a2.argv) {
+            (Some(argv1), Some(argv2)) =>
+              if argv1.length() == argv2.length() {
+                let mut same = true
+                for k in 0..<argv1.length() {
+                  if argv1.at(k) != argv2.at(k) {
+                    same = false
+                    break
+                  }
+                }
+                if same {
+                  return true
+                }
+              }
+            _ => ()
+          }
+        } else {
+          return true
+        }
+      }
+    }
+  }
+  false
+}
+
+///|
+/// 检测 exclude 冲突
+fn has_exclude_conflict(r1 : Rule, r2 : Rule) -> Bool {
+  // 如果 r1 的 patterns 匹配 r2 的 exclude，则可能有冲突
+  for p in r1.patterns {
+    for e in r2.exclude {
+      if p == e {
+        return true
+      }
+    }
+  }
+  false
+}
+
+///|
+/// 从 JSON 文本解析配置
+pub fn Config::from_json(text : String) -> Result[Config, String] {
+  let j = @json.parse(text) catch {
+    _ => return Err("配置 JSON 解析失败")
+  }
+  let schema_version = match jint(jget(j, "schema_version")) {
+    Some(v) => v
+    None => 1
+  }
+  let watch_id = match jstr(jget(j, "watch_id")) {
+    Some(v) => v
+    None => ""
+  }
+  let watch_dir = match jstr(jget(j, "watch_dir")) {
+    Some(v) => v
+    None => ""
+  }
+  let recursive = match jbool(jget(j, "recursive")) {
+    Some(b) => b
+    None => true
+  }
+  let debounce_ms = match jint(jget(j, "debounce_ms")) {
+    Some(v) => v
+    None => 0
+  }
+  let rules : Array[Rule] = []
+  match jget(j, "rules") {
+    Some(Array(items)) =>
+      for it in items {
+        match parse_rule(it) {
+          Ok(r) => rules.push(r)
+          Err(e) => return Err(e)
+        }
+      }
+    _ => ()
+  }
+  let allowed_programs = jstr_array(jget(j, "allowed_programs"))
+  let extensions = jstr_array(jget(j, "extensions"))
+  let logging = parse_logging_config(jget(j, "logging"))
+  let cfg = {
+    schema_version,
+    watch_id,
+    watch_dir,
+    recursive,
+    debounce_ms,
+    rules,
+    allowed_programs,
+    extensions,
+    logging,
+  }
+  validate_config(cfg)
+}
+
+///|
+/// 累积式校验：一次性报告全部问题
+fn validate_config(cfg : Config) -> Result[Config, String] {
+  let errs : Array[String] = []
+  let warns : Array[String] = []
+  // schema_version 校验：必须 >= 1
+  if cfg.schema_version < 1 {
+    errs.push(
+      "schema_version 必须 >= 1，当前值: " +
+      cfg.schema_version.to_string(),
+    )
+  }
+  // watch_id 非空校验
+  if cfg.watch_id == "" {
+    errs.push("watch_id 不能为空")
+  }
+  // watch_dir 非空校验
+  if cfg.watch_dir == "" {
+    errs.push("watch_dir 不能为空")
+  }
+
+  // 至少一条规则
+  if cfg.rules.length() == 0 {
+    errs.push("至少需要一条规则")
+  }
+  // 每条规则字段完整性校验
+  let ids : Map[String, Int32] = Map([], capacity=0)
+  for r in cfg.rules {
+    if r.id == "" {
+      errs.push("规则缺少 id")
+    }
+    if r.events.length() == 0 {
+      errs.push("规则 " + r.id + " 缺少 events")
+    }
+    if r.patterns.length() == 0 {
+      errs.push("规则 " + r.id + " 缺少 patterns")
+    }
+    if r.actions.length() == 0 {
+      errs.push("规则 " + r.id + " 缺少 actions")
+    }
+    match ids.get(r.id) {
+      Some(_) => errs.push("规则 id 重复: " + r.id)
+      None => ids[r.id] = 1
+    }
+  }
+  // debounce_ms 非负校验
+  if cfg.debounce_ms < 0 {
+    errs.push("debounce_ms 不能为负")
+  }
+  // 显式 allowlist 校验（警告级别）：command 动作引用的程序必须在白名单中。
+  // 安全默认：白名单为空 ⇒ 所有 command 都会被 ExecPolicy 拒绝，这里提示用户。
+  for r in cfg.rules {
+    for a in r.actions {
+      if a.kind == "command" {
+        match a.argv {
+          Some(argv) if argv.length() > 0 => {
+            let prog = argv[0]
+            if !cfg.allowed_programs.contains(prog) {
+              warns.push(
+                "⚠️ 安全: 规则 '" +
+                r.id +
+                "' 的 command 程序 '" +
+                prog +
+                "' 不在 allowed_programs 白名单中，运行时将被 ExecPolicy 拒绝",
+              )
+            }
+          }
+          _ => ()
+        }
+      }
+    }
+  }
+  // 规则冲突检测（警告级别）
+  let conflicts = detect_conflicts(cfg.rules)
+  for c in conflicts {
+    warns.push(c)
+  }
+  if errs.length() == 0 {
+    // 如果有警告，输出警告信息
+    if warns.length() > 0 {
+      println("")
+      println("⚠️  配置警告:")
+      for w in warns {
+        println("  " + w)
+      }
+      println("")
+    }
+    Ok(cfg)
+  } else {
+    Err("配置校验失败:\n" + errs.join("\n"))
+  }
+}
+
+///|
+/// 公开校验入口：对已解析的 Config 做累积式校验
+///
+/// 用法：
+///   let cfg = Config::from_json(text)?
+///   validate(cfg)?
+pub fn validate(cfg : Config) -> Result[Config, String] {
+  validate_config(cfg)
+}
+
+///|
+/// 默认配置（测试 / 占位用）
+pub fn Config::default() -> Config {
+  {
+    schema_version: 1,
+    watch_id: "",
+    watch_dir: "",
+    recursive: true,
+    debounce_ms: 0,
+    rules: [],
+    allowed_programs: [],
+    extensions: [],
+    logging: LoggingConfig::new(),
+  }
+}
+
+///|
+/// 复制一份配置并覆盖监控目录
+///
+/// 跨包无法构造结构体字面量（`@pkg.Type{..}` 不支持），
+/// 故用伴生函数完成「派生配置」这类操作。
+pub fn Config::with_watch_dir(self : Config, dir : String) -> Config {
+  {
+    schema_version: self.schema_version,
+    watch_id: self.watch_id,
+    watch_dir: dir,
+    recursive: self.recursive,
+    debounce_ms: self.debounce_ms,
+    rules: self.rules,
+    allowed_programs: self.allowed_programs,
+    extensions: self.extensions,
+    logging: self.logging,
+  }
+}
+
+///|
+/// 复制一份配置并覆盖去抖时长
+pub fn Config::with_debounce_ms(self : Config, ms : Int32) -> Config {
+  {
+    schema_version: self.schema_version,
+    watch_id: self.watch_id,
+    watch_dir: self.watch_dir,
+    recursive: self.recursive,
+    debounce_ms: ms,
+    rules: self.rules,
+    allowed_programs: self.allowed_programs,
+    extensions: self.extensions,
+    logging: self.logging,
+  }
+}
+
+///|
+/// 从 JSON 文件解析配置
+///
+/// 参数：
+///   path - JSON 文件路径
+///
+/// 返回：配置或错误

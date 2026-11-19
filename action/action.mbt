@@ -1,0 +1,529 @@
+// ============================================================================
+// action · 生命周期动作（扩展点 EP-01）
+//
+// 这是"产物生命周期语义"支柱的执行侧骨架：动作是有语义的（command / mcp_tool_call
+// / webhook / internal），而非裸 shell。
+//
+// P0 实现期：
+//   - `command` 分支接入 rx `run_command` + `ExecPolicy`（白名单、argv 不走 shell）；
+//   - `mcp_tool_call` / `webhook` / `internal` 保留为待实现的扩展位，
+//     返回**可诊断错误**而非静默成功。
+//
+// ⚠️ 安全模型（rx 侧设计，本项目沿用）：
+//   `ExecPolicy::default()` 只放行 `action:*` / `handler:*`，
+//   任意命令必须显式加入 `allow`（`cli:<prog>`）或设 `allow_any=true`。
+//   ⇒ mcp-watcher 的默认配置**不会**因为一条规则而执行任意命令。
+//   ⇒ 这正是"不是泛泛的跑命令"的制度化落点。
+//
+// ⚠️ MoonBit 语法约束（实测确认）：
+//   rx 的泛型类型跨包引用必须带完整类型标注；
+//   具名参数语法是 `label=value`（不是 `label~value`）。
+// ============================================================================
+
+///|
+/// 动作扩展点：具体执行体
+pub trait Action {
+  fn run(self : Self, ev : @watch.FsEvent) -> Result[Unit, String]
+}
+
+///|
+/// 动作执行结果（供遥测与测试断言）
+#derive(Eq, Debug)
+pub(all) struct ActionOutcome {
+  /// 动作种类
+  kind : String
+  /// 是否成功
+  ok : Bool
+  /// 退出码（command 动作为 0；其他动作为 -1）
+  exit_code : Int32
+  /// 标准输出（command 动作）
+  stdout : String
+  /// 标准错误
+  stderr : String
+}
+
+///|
+pub extend ActionOutcome with Eq::{not_equal, equal}
+
+///|
+pub extend ActionOutcome with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+/// 构造动作执行结果
+pub fn ActionOutcome::new(
+  kind : String,
+  ok : Bool,
+  exit_code : Int32,
+  stdout : String,
+  stderr : String,
+) -> ActionOutcome {
+  { kind, ok, exit_code, stdout, stderr, }
+}
+
+///|
+/// 构建 ExecPolicy：默认拒绝任意命令，只放行规则显式声明的程序
+///
+/// 参数：
+///   allow_programs - 规则里显式允许的程序名（如 ["git", "node"]）
+///
+/// 语义：把程序名转成 rx 认可的 `cli:<prog>` 条目。
+/// **空 allow_programs ⇒ 连一个命令都跑不了**（安全默认）。
+pub fn build_policy(allow_programs : Array[String]) -> @rt.ExecPolicy {
+  let allow : Array[String] = []
+  for p in allow_programs {
+    allow.push("cli:" + p)
+  }
+  @rt.ExecPolicy::new(allow, false, 60.0)
+}
+
+///|
+/// 执行 command 动作（同步等待结果）
+///
+/// 参数：
+///   spec   - 动作规格（kind 必须是 "command"，argv 必须非空）
+///   ev     - 触发事件（用于未来的变量占位展开）
+///   policy - 执行策略（白名单）
+///
+/// 返回：动作执行结果。失败时 `ok=false` 且 `stderr` 携带可诊断原因。
+pub fn run_command_action(
+  spec : @config.ActionSpec,
+  ev : @watch.FsEvent,
+  policy : @rt.ExecPolicy,
+) -> ActionOutcome {
+  let _ = ev
+  let argv = match spec.argv {
+    Some(a) => a
+    None =>
+      return ActionOutcome::new(
+        "command", false, -1, "", "command 动作缺少 argv",
+      )
+  }
+  if argv.length() == 0 {
+    return ActionOutcome::new(
+      "command", false, -1, "", "command 动作的 argv 为空",
+    )
+  }
+  // argv 一律以数组传递，**绝不 shell 拼接**（rx 侧保证）
+  let payload = @json.parse(payload_json(argv)) catch {
+    _ =>
+      return ActionOutcome::new(
+        "command", false, -1, "", "command payload 构造失败",
+      )
+  }
+  // 闭包无法直接改外层变量，须经 Ref 间接赋值
+  let result : Ref[@rt.CommandResult?] = Ref::Ref(None)
+  let err : Ref[String?] = Ref::Ref(None)
+  let obs = @rt.run_command(policy, payload)
+  let _ = obs.subscribe_on_next(fn(r : @rt.CommandResult) {
+    result.val = Some(r)
+  })
+  let _ = obs.subscribe_on_error(fn(e : @rt.ExecError) {
+    err.val = Some(exec_error_text(e))
+  })
+  match result.val {
+    Some(r) =>
+      ActionOutcome::new(
+        "command",
+        r.exit_code == 0,
+        r.exit_code,
+        r.stdout,
+        r.stderr,
+      )
+    None =>
+      ActionOutcome::new(
+        "command",
+        false,
+        -1,
+        "",
+        match err.val {
+          Some(e) => e
+          None => "command 执行未产出结果"
+        },
+      )
+  }
+}
+
+///|
+/// 把 argv 数组序列化为 rx `run_command` 期望的 payload JSON
+///
+/// 格式：`{"kind":"cli","argv":["a","b"]}`
+pub fn payload_json(argv : Array[String]) -> String {
+  let parts : Array[String] = []
+  for a in argv {
+    parts.push("\"" + escape_json_string(a) + "\"")
+  }
+  "{\"kind\":\"cli\",\"argv\":[" + parts.join(",") + "]}"
+}
+
+// ============================================================================
+// P3 · 产物生命周期语义
+// ============================================================================
+
+///|
+/// 产物追踪项（用于 TTL 清理）
+///
+/// 注意：当前实现为内存追踪，重启后丢失。
+/// 持久化追踪需要 @mon 包提供文件读写 API。
+#derive(Eq, Debug)
+pub(all) struct ProductRecord {
+  /// 产物路径
+  path : String
+  /// 创建时间（纳秒，来自 @rx.real_now()）
+  created_at_ns : Int64
+  /// TTL（秒）
+  ttl_seconds : Int32
+}
+
+///|
+pub extend ProductRecord with Eq::{not_equal, equal}
+
+///|
+pub extend ProductRecord with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+/// 产物追踪器（内存态）
+///
+/// 语义：记录每个产物的创建时间，TTL 到期后触发清理。
+/// 清理动作由 scheduler 在每次事件循环时检查。
+pub(all) struct ProductTracker {
+  /// 产物记录表
+  records : Array[ProductRecord]
+}
+
+///|
+/// 构造产物追踪器
+pub fn ProductTracker::new() -> ProductTracker {
+  { records: [], }
+}
+
+///|
+/// 注册产物（创建时调用）
+///
+/// 参数：
+///   path - 产物路径
+///   ttl_seconds - TTL（秒，0 = 不过期）
+///
+/// 返回：产物记录
+pub fn ProductTracker::register(
+  tracker : ProductTracker,
+  path : String,
+  ttl_seconds : Int32,
+) -> ProductTracker {
+  if ttl_seconds > 0 {
+    let record = ProductRecord::{
+      path,
+      created_at_ns: Int64::from_int(@rx.real_now().to_int()),
+      ttl_seconds,
+    }
+    tracker.records.push(record)
+  }
+  tracker
+}
+
+///|
+/// 找出所有已到期的产物记录（TTL 核心语义，可单测、可观测）
+///
+/// 判定：now - created_at_ns >= ttl_seconds * 1e9；ttl_seconds <= 0 视为不过期
+/// （register 本就不注册这类记录，这里再兜底）。
+pub fn ProductTracker::expired_records(
+  tracker : ProductTracker,
+  now_ns : Int64,
+) -> Array[ProductRecord] {
+  let out : Array[ProductRecord] = []
+  for record in tracker.records {
+    if record.ttl_seconds > 0 {
+      let age_ns = now_ns - record.created_at_ns
+      let ttl_ns = Int64::from_int(record.ttl_seconds) * 1_000_000_000
+      if age_ns >= ttl_ns {
+        out.push(record)
+      }
+    }
+  }
+  out
+}
+
+///|
+/// 检查并清理过期产物（P3 方案 B：TTL 语义做实 + 诚实降级）
+///
+/// 行为：
+///   1. 计算到期产物，发出结构化的 `product.expired` 生命周期事件（println 可诊断）；
+///   2. 从追踪表移除到期记录，返回剩余 tracker；
+///   3. **不删文件、不移动文件**——trash 依赖 rx native 缺失的 mkdir/rename API，
+///      已诚实降级为"规划中"（见 workbuddy/plan/p3-feasibility.md）。
+///      到期只表示"逻辑生命周期结束"，物理回收留待 rx fs API 补齐。
+///
+/// 返回：(到期数量, 剩余追踪器)
+pub fn ProductTracker::cleanup_expired(
+  tracker : ProductTracker,
+  _watch_dir : String,
+) -> (Int32, ProductTracker) {
+  let now_ns = Int64::from_int(@rx.real_now().to_int())
+  let expired = tracker.expired_records(now_ns)
+  let remaining : Array[ProductRecord] = []
+  for record in tracker.records {
+    let is_expired = expired.any(fn(r : ProductRecord) { r.path == record.path })
+    if !is_expired {
+      remaining.push(record)
+    }
+  }
+  // 发出可诊断的生命周期事件（不再静默 no-op）
+  for record in expired {
+    let ev = LifecycleEvent::new(
+      @config.LifecycleEventType::Expired,
+      record.path,
+    )
+    println(
+      "[lifecycle] " +
+      ev.event_name() +
+      " path=" +
+      ev.path +
+      " ttl=" +
+      record.ttl_seconds.to_string() +
+      "s（逻辑过期；物理回收待 rx fs API）",
+    )
+  }
+  (expired.length(), { records: remaining, })
+}
+
+///|
+/// 把 rx 的 FsError 转成可读文本（action 包局部实现）
+fn fs_error_text_local(e : @mon.FsError) -> String {
+  match e {
+    @mon.FsError::NotFound => "NotFound"
+    @mon.FsError::Io => "Io"
+    @mon.FsError::OutOfMemory => "OutOfMemory"
+  }
+}
+
+///|
+/// 持久化追踪表到 JSONL（P3 方案 B：重启后不丢失 TTL 状态）
+///
+/// 每行格式：{"path":"...","created_at_ns":N,"ttl_seconds":N}
+pub fn ProductTracker::save(
+  tracker : ProductTracker,
+  path : String,
+) -> Result[Unit, String] {
+  let mut text = ""
+  for r in tracker.records {
+    let obj = @json.Json::object({
+      "path": @json.Json::string(r.path),
+      "created_at_ns": @json.Json::number(Int64::to_double(r.created_at_ns)),
+      "ttl_seconds": @json.Json::number(r.ttl_seconds.to_double()),
+    })
+    text = text + @json.Json::stringify(obj) + "\n"
+  }
+  match @mon.fs_write_atomic(path, text) {
+    Ok(_) => Ok(())
+    Err(e) => Err("持久化产物追踪表失败: " + fs_error_text_local(e))
+  }
+}
+
+///|
+/// 从 JSONL 恢复追踪表（损坏行跳过，不崩溃）
+pub fn ProductTracker::load(path : String) -> ProductTracker {
+  let records : Array[ProductRecord] = []
+  let text = match @mon.fs_read_text(path) {
+    Ok(s) => s
+    Err(_) => return { records: [], }
+  }
+  for line in text.split("\n") {
+    let trimmed = line.trim()
+    if trimmed == "" {
+      continue
+    }
+    let parsed = @json.parse(trimmed) catch { _ => continue }
+    match parsed {
+      @json.Json::Object(m) => {
+        let p = match m.get("path") {
+          Some(@json.Json::String(s)) => s
+          _ => continue
+        }
+        let created = match m.get("created_at_ns") {
+          Some(@json.Json::Number(n)) => Int64::from_int(n.to_int())
+          _ => continue
+        }
+        let ttl = match m.get("ttl_seconds") {
+          Some(@json.Json::Number(n)) => n.to_int()
+          _ => continue
+        }
+        records.push(ProductRecord::{
+          path: p,
+          created_at_ns: created,
+          ttl_seconds: ttl,
+        })
+      }
+      _ => ()
+    }
+  }
+  { records, }
+}
+
+///|
+/// 加密文件（P3 产物生命周期语义）
+///
+/// 参数：
+///   path - 文件路径
+///   key - 加密密钥（可选，未提供时使用默认密钥）
+///
+/// 返回：成功或失败
+///
+/// 诚实降级说明（实测确认，勿凭注释推翻）：
+///   rx 的 RhopCrypto 底层 Fernet 原语是 `extern "js"`（node:crypto），
+///   native/wasm 下加密返回空串、解密返回可诊断 Err——无法真正做实。
+///   本函数明确返回 Err（"当前目标不支持"），不再静默返回 Ok 伪装成功；
+///   且**绝不写入空密文**，以免破坏产物。若将来 rx 补齐 native crypto FFI，
+///   可在此接入 encrypt_secret/decrypt_secret。
+pub fn encrypt_file(path : String, key : String?) -> Result[Unit, String] {
+  let _ = path
+  let _ = key
+  Err("产物加密当前目标不支持：rx Fernet 原语仅 js 可用（native/wasm 无 node:crypto），已诚实降级；不写入空密文以免破坏产物")
+}
+
+///|
+/// 生命周期事件（供 EventBus 发布）
+///
+/// 注意：当前实现为日志输出，实际发布需要 EventBus 接入。
+/// 等 scheduler 侧接入 EventBus 后，会发布到对应事件名。
+#derive(Eq, Debug)
+pub(all) struct LifecycleEvent {
+  /// 事件类型
+  kind : @config.LifecycleEventType
+  /// 产物路径
+  path : String
+  /// 时间戳（纳秒）
+  timestamp_ns : Int64
+}
+
+///|
+pub extend LifecycleEvent with Eq::{not_equal, equal}
+
+///|
+pub extend LifecycleEvent with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+/// 构造生命周期事件
+pub fn LifecycleEvent::new(
+  kind : @config.LifecycleEventType,
+  path : String,
+) -> LifecycleEvent {
+  { kind, path, timestamp_ns: Int64::from_int(@rx.real_now().to_int()), }
+}
+
+///|
+/// 生命周期事件 → 事件名（用于 EventBus 订阅）
+///
+/// 格式：`product.<type>`（如 `product.created`）
+pub fn LifecycleEvent::event_name(self : LifecycleEvent) -> String {
+  self.kind.to_string()
+}
+
+///|
+/// JSON 字符串转义（最小实现：处理引号与反斜杠与控制字符）
+pub fn escape_json_string(s : String) -> String {
+  let out = Ref::Ref("")
+  for ch in s {
+    match ch {
+      '"' => out.val = out.val + "\\\""
+      '\\' => out.val = out.val + "\\\\"
+      '\n' => out.val = out.val + "\\n"
+      '\r' => out.val = out.val + "\\r"
+      '\t' => out.val = out.val + "\\t"
+      _ => out.val = out.val + ch.to_string()
+    }
+  }
+  out.val
+}
+
+///|
+/// 把 rx 的 `ExecError` 转成可读文本
+pub fn exec_error_text(e : @rt.ExecError) -> String {
+  match e {
+    @rt.ExecError::PolicyDenied(msg) => "策略拒绝: " + msg
+    @rt.ExecError::SpawnFailed(msg) => "执行失败: " + msg
+    _ => "执行错误"
+  }
+}
+
+///|
+/// 按动作规格执行（带日志记录）
+///
+/// 支持的 kind：
+///   - `command`      → rx run_command + ExecPolicy（已接入）
+///   - `mcp_tool_call`→ 待实现（EP-01 扩展位），返回可诊断错误
+///   - `webhook`      → 待实现（EP-01 扩展位），返回可诊断错误
+///   - `internal`     → 待实现（EP-01 扩展位），内部动作注册表尚未建立
+///
+/// 参数：
+///   spec   - 动作规格
+///   ev     - 触发事件
+///   policy - 执行策略（command 动作用；其他动作忽略）
+///   logging_config - 日志配置（用于控制日志输出）
+pub fn run_action(
+  spec : @config.ActionSpec,
+  ev : @watch.FsEvent,
+  policy : @rt.ExecPolicy,
+  logging_config : @config.LoggingConfig,
+) -> Result[ActionOutcome, String] {
+  // 记录执行开始时间
+  let start_time_ns = Int64::from_int(@rx.real_now().to_int())
+
+  let result = match spec.kind {
+    "command" => {
+      let outcome = run_command_action(spec, ev, policy)
+      if outcome.ok {
+        Ok(outcome)
+      } else {
+        Err(outcome.stderr)
+      }
+    }
+    "mcp_tool_call" =>
+      Err(
+        "action mcp_tool_call 待实现（EP-01 动作扩展）：需要 MCP 客户端接入",
+      )
+    "webhook" =>
+      Err(
+        "action webhook 待实现（EP-01 动作扩展）：需要 HTTP 客户端接入",
+      )
+    "internal" =>
+      Err(
+        "action internal 待实现（EP-01 动作扩展）：内部动作注册表尚未建立",
+      )
+    other => Err("未知 action kind: " + other)
+  }
+
+  // 记录执行结束时间
+  let end_time_ns = Int64::from_int(@rx.real_now().to_int())
+
+  // 如果日志启用，输出日志
+  if logging_config.enabled {
+    let status = match result {
+      Ok(_) => "success"
+      Err(_) => "failure"
+    }
+    let result_summary = match result {
+      Ok(outcome) => "exit_code=" + outcome.exit_code.to_string()
+      Err(err) => "error=" + err
+    }
+    let duration_ms = (end_time_ns - start_time_ns).to_int() / 1000000
+
+    println(
+      "[" +
+      status +
+      "] " +
+      "rule_action " +
+      spec.kind +
+      " " +
+      "event=" +
+      ev.event_type.to_string() +
+      ":" +
+      ev.path +
+      " " +
+      "duration=" +
+      duration_ms.to_string() +
+      "ms " +
+      result_summary,
+    )
+  }
+
+  result
+}

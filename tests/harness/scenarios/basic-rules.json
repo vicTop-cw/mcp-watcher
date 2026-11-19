@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "watch_id": "harness-basic",
+  "watch_dir": ".watch",
+  "recursive": true,
+  "debounce_ms": 0,
+  "rules": [
+    {
+      "id": "cleanup",
+      "events": [
+        "create"
+      ],
+      "patterns": [
+        "*.tmp"
+      ],
+      "exclude": [],
+      "condition": null,
+      "actions": [
+        {
+          "kind": "command",
+          "argv": [
+            "cmd",
+            "/c",
+            "echo",
+            "cleanup"
+          ],
+          "target": null,
+          "body": null
+        }
+      ],
+      "stop_after": false
+    },
+    {
+      "id": "md-modify",
+      "events": [
+        "modify"
+      ],
+      "patterns": [
+        "*.md"
+      ],
+      "exclude": [],
+      "condition": null,
+      "actions": [
+        {
+          "kind": "command",
+          "argv": [
+            "cmd",
+            "/c",
+            "echo",
+            "md-modify"
+          ],
+          "target": null,
+          "body": null
+        }
+      ],
+      "stop_after": false
+    }
+  ],
+  "extensions": [],
+  "logging": {
+    "enabled": false,
+    "level": "info",
+    "file": ""
+  },
+  "allowed_programs": [
+    "cmd"
+  ]
+}

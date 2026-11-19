@@ -1,0 +1,18 @@
+{
+  "name": "deny-command",
+  "description": "allowed_programs 为空（安全默认）：create .deny 触发 command 规则，期望 ExecPolicy 拒绝——exit=-1、stderr 含『策略拒绝』、stdout 为空，证明规则不会自动放行任意命令。",
+  "ops": [
+    { "op": "create", "path": "blocked.deny", "content": "must not execute" }
+  ],
+  "expect": [
+    {
+      "rule_id": "deny-cmd",
+      "event": "create",
+      "action_type": "command",
+      "path": "blocked.deny",
+      "exit": -1,
+      "stdout": "",
+      "stderr": { "$contains": "策略拒绝" }
+    }
+  ]
+}

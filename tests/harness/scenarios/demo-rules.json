@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "watch_id": "demo",
+  "watch_dir": "tests/harness/.watch",
+  "recursive": true,
+  "debounce_ms": 100,
+  "rules": [
+    {
+      "id": "cleanup",
+      "events": [
+        "create"
+      ],
+      "patterns": [
+        "*.tmp"
+      ],
+      "exclude": [
+        "keep.tmp"
+      ],
+      "condition": null,
+      "actions": [
+        {
+          "kind": "command",
+          "argv": [
+            "cmd",
+            "/c",
+            "echo",
+            "cleanup"
+          ],
+          "target": null,
+          "body": null
+        }
+      ],
+      "stop_after": false
+    }
+  ],
+  "extensions": [],
+  "allowed_programs": [
+    "cmd"
+  ]
+}

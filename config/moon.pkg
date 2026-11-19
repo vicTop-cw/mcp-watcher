@@ -1,0 +1,5 @@
+import {
+  "vicTop-cw/RX-MBT/monitor" @mon,
+  "moonbitlang/core/json",
+  "moonbitlang/core/debug",
+}

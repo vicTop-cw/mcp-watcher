@@ -1,0 +1,22 @@
+import {
+  "mcp-watcher/config",
+  "mcp-watcher/watch",
+  "mcp-watcher/scheduler",
+  "mcp-watcher/action",
+  "mcp-watcher/util",
+  "vicTop-cw/RX-MBT/rx",
+  "vicTop-cw/RX-MBT/monitor" @mon,
+  "vicTop-cw/RX-MBT/rhop_task" @rt,
+  "moonbitlang/core/ref",
+  "moonbitlang/core/json",
+  "moonbitlang/core/string",
+  "moonbitlang/core/async",
+  "moonbitlang/core/env",
+  "moonbitlang/core/debug",
+}
+
+pkgtype(kind: "executable")
+
+options(
+  "allow-experimental-packages": [ "moonbitlang/core/async" ],
+)

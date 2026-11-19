@@ -1,0 +1,11 @@
+import {
+  "mcp-watcher/config",
+  "vicTop-cw/RX-MBT/monitor" @mon,
+  "vicTop-cw/RX-MBT/rx",
+  "moonbitlang/core/debug",
+  "moonbitlang/core/async",
+}
+
+options(
+  "allow-experimental-packages": [ "moonbitlang/core/async" ],
+)

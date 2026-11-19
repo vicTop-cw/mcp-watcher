@@ -1,0 +1,24 @@
+import {
+  "mcp-watcher/config",
+  "mcp-watcher/watch",
+  "vicTop-cw/RX-MBT/rx",
+  "vicTop-cw/RX-MBT/rhop_task" @rt,
+  "vicTop-cw/RX-MBT/monitor" @mon,
+  "moonbitlang/async/fs" @fs,
+  "moonbitlang/core/json",
+  "moonbitlang/core/ref",
+  "moonbitlang/core/debug",
+  "moonbitlang/core/async",
+}
+
+options(
+  // p3_persist_native_test.mbt 走 @mon.fs_write_atomic / fs_read_text，
+  // 依赖 native C FFI（js/wasm 无文件系统），门控为 native 专属。
+  targets: {
+    "p3_persist_native_test.mbt": [ "native" ],
+    "trash_native.mbt": [ "native" ],
+    "trash_native_test.mbt": [ "native" ],
+    "trash_stub.mbt": [ "js", "wasm" ],
+  },
+  "allow-experimental-packages": [ "moonbitlang/core/async" ],
+)

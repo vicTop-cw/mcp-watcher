@@ -1,0 +1,23 @@
+# moon 构建产物（moon 自动生成，不入库）
+_build/
+pkg.generated.mbti
+
+# 运行时状态
+fist-mbt.db
+temp/
+output/
+
+# 工具 / agent 状态
+.arts/
+.codeartsdoer/
+.workbuddy/
+
+# 测试运行时产物
+tests/harness/.results.jsonl
+tests/harness/.watch/
+tests/harness/.ready
+tests/probe/.tmp_r2/
+tests/probe/.tmp_r2b/
+__pycache__/
+*.pyc
+*.log

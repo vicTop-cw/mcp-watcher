@@ -1,0 +1,11 @@
+{
+  "name": "p0-smoke",
+  "description": "P0 验收：创建单个 .tmp 文件，期望 cleanup 规则以 command 动作响应一次。",
+  "ops": [
+    { "op": "create", "path": "scratch.tmp", "content": "drop me" },
+    { "op": "sleep", "ms": 300 }
+  ],
+  "expect": [
+    { "rule_id": "cleanup", "event": "create", "action_type": "command", "path": "scratch.tmp", "exit": 0, "stdout": { "$contains": "cleanup" } }
+  ]
+}

@@ -1,0 +1,5 @@
+import {
+  "vicTop-cw/RX-MBT/rx" @rx,
+  "moonbitlang/core/debug" @debug,
+  "mcp-watcher/config" @config,
+}

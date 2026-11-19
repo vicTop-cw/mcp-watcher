@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "watch_id": "deny-command-harness",
+  "watch_dir": "tests/harness/.watch",
+  "recursive": true,
+  "debounce_ms": 0,
+  "rules": [
+    {
+      "id": "deny-cmd",
+      "events": [
+        "create"
+      ],
+      "patterns": [
+        "*.deny"
+      ],
+      "exclude": [],
+      "condition": null,
+      "actions": [
+        {
+          "kind": "command",
+          "argv": [
+            "cmd",
+            "/c",
+            "echo",
+            "SHOULD-NOT-RUN"
+          ],
+          "target": null,
+          "body": null
+        }
+      ],
+      "stop_after": false
+    }
+  ],
+  "extensions": [],
+  "allowed_programs": []
+}
