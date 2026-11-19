@@ -83,6 +83,7 @@ pub fn attach_rules(
   logging_config : @config.LoggingConfig,
   log : Ref[Array[String]],
   records : Ref[Array[ExecRecord]],
+  registry~ : @action.InternalRegistry = @action.InternalRegistry::new(),
 ) -> Int32 {
   // 按优先级降序排序（高优先级先执行）
   let sorted_rules = rules
@@ -140,7 +141,9 @@ pub fn attach_rules(
             None => true
           }
           if proceed {
-            exec_actions(rule, fe, policy, logging_config, watch_dir, log, records)
+            exec_actions(
+              rule, fe, policy, logging_config, watch_dir, log, records, registry,
+            )
             // 记录已执行（once 语义）
             if rule.stop_after {
               executed_rules.val.push(rule.id)
@@ -167,9 +170,10 @@ fn exec_actions(
   watch_dir : String,
   log : Ref[Array[String]],
   records : Ref[Array[ExecRecord]],
+  registry : @action.InternalRegistry,
 ) -> Unit {
   for a in rule.actions {
-    match @action.run_action(a, fe, policy, logging_config, watch_dir) {
+    match @action.run_action(a, fe, policy, logging_config, watch_dir, registry=registry) {
       Ok(o) => {
         if o.accepted {
           log.val.push(
@@ -366,6 +370,7 @@ pub fn run_once(
   policy : @rt.ExecPolicy,
   logging_config : @config.LoggingConfig,
   watch_dir : String,
+  registry~ : @action.InternalRegistry = @action.InternalRegistry::new(),
 ) -> Array[String] {
   let matched = @rule.dispatch(rules, ev)
   let log : Array[String] = []
@@ -388,7 +393,7 @@ pub fn run_once(
     }
     if proceed {
       for a in r.actions {
-        match @action.run_action(a, ev, policy, logging_config, watch_dir) {
+        match @action.run_action(a, ev, policy, logging_config, watch_dir, registry=registry) {
           Ok(o) =>
             if o.accepted {
               log.push(
@@ -461,4 +466,114 @@ pub fn ReloadResult::new(
   error : String,
 ) -> ReloadResult {
   { ok, rule_count, error, }
+}
+
+// ============================================================================
+// EP-01a · internal 动作注册表接线（四 op 直连 scheduler 既有函数）
+// ============================================================================
+
+///|
+/// 监控器运行时状态（EP-01a）：internal op 触达既有设施所需的最小上下文
+///
+/// 由守护进程（main run_daemon / cmd_run_once）构造一次，注册表闭包与
+/// watch 订阅共享同一状态（paused 门控双端一致）。
+pub struct WatcherState {
+  /// 规则文件路径（reload_config op 直连既有 reload_config）
+  rules_file : String
+  /// 实例 id（{watch_id} 占位符展开）
+  watch_id : String
+  /// 监控根目录（{watch_dir} 占位符展开）
+  watch_dir : String
+  /// 暂停门控（pause_watch / resume_watch 翻转；watch 订阅回调据此丢弃事件）
+  paused : Ref[Bool]
+  /// 生命周期事件累加器（log_event op 落此；可测试断言，未来接 EventBus 发布）
+  lifecycle_events : Ref[Array[@action.LifecycleEvent]]
+}
+
+///|
+/// 构造监控器运行时状态（paused 缺省 false，事件流初始畅通）
+pub fn WatcherState::new(
+  rules_file : String,
+  watch_id : String,
+  watch_dir : String,
+) -> WatcherState {
+  {
+    rules_file,
+    watch_id,
+    watch_dir,
+    paused: Ref::Ref(false),
+    lifecycle_events: Ref::Ref([]),
+  }
+}
+
+///|
+/// 构建 internal 动作注册表：schema 四 op 直连 scheduler 既有函数
+///
+///   - reload_config → 本文件既有 `reload_config`（P2 热重载通道；
+///     失败时保留旧规则表语义由上层保证——本 op 只报告解析结果，不改规则表）
+///   - pause_watch   → paused 门控置 true（watch 订阅停止向规则引擎投递）
+///   - resume_watch  → paused 门控置 false
+///   - log_event     → schema §7 占位符展开后落 LifecycleEvent（Logged）+ 可诊断日志
+pub fn build_internal_registry(state : WatcherState) -> @action.InternalRegistry {
+  let reg = @action.InternalRegistry::new()
+  reg.register(
+    "reload_config",
+    fn(_spec : @config.ActionSpec, _ev : @watch.FsEvent, _d : String) {
+      let r = reload_config(state.rules_file)
+      if r.ok {
+        @action.ActionOutcome::new(
+          "internal", true, 0,
+          "reload ok rules=" + r.rule_count.to_string(),
+          "",
+        )
+      } else {
+        @action.ActionOutcome::new(
+          "internal", false, -1, "", "热重载失败: " + r.error,
+        )
+      }
+    },
+  )
+  reg.register(
+    "pause_watch",
+    fn(_spec : @config.ActionSpec, _ev : @watch.FsEvent, _d : String) {
+      state.paused.val = true
+      @action.ActionOutcome::new("internal", true, 0, "watch paused", "")
+    },
+  )
+  reg.register(
+    "resume_watch",
+    fn(_spec : @config.ActionSpec, _ev : @watch.FsEvent, _d : String) {
+      state.paused.val = false
+      @action.ActionOutcome::new("internal", true, 0, "watch resumed", "")
+    },
+  )
+  reg.register(
+    "log_event",
+    fn(spec : @config.ActionSpec, ev : @watch.FsEvent, _d : String) {
+      let msg = match spec.message {
+        Some(m) => m
+        None => ""
+      }
+      let (rendered, warns) = @action.render_placeholders(
+        msg, ev, state.watch_dir, state.watch_id,
+      )
+      for w in warns {
+        println("[warn] " + w)
+      }
+      let le = @action.LifecycleEvent::new_with_message(
+        @config.LifecycleEventType::Logged, ev.path, rendered,
+      )
+      state.lifecycle_events.val.push(le)
+      println(
+        "[lifecycle] " +
+        le.event_name() +
+        " path=" +
+        le.path +
+        " message=" +
+        le.message,
+      )
+      @action.ActionOutcome::new("internal", true, 0, rendered, "")
+    },
+  )
+  reg
 }

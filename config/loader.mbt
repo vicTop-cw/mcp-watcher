@@ -210,7 +210,28 @@ fn parse_action(v : Json) -> Result[ActionSpec, String] {
           None => ()
         }
       }
-      Ok({ kind, argv, target, body, ttl, cleanup, acceptance, })
+      // EP-01a：internal 的 op/message 解析（fail-closed）
+      let op = jstr(m.get("op"))
+      let message = jstr(m.get("message"))
+      if kind == "internal" {
+        match op {
+          Some(o) if o != "" => ()
+          _ => return Err("internal 动作缺少必填字段 op")
+        }
+      } else {
+        match (op, message) {
+          (Some(_), _) =>
+            return Err(
+              "op 字段仅 internal 动作可用（当前 kind=" + kind + "）",
+            )
+          (None, Some(_)) =>
+            return Err(
+              "message 字段仅 internal 动作可用（当前 kind=" + kind + "）",
+            )
+          _ => ()
+        }
+      }
+      Ok({ kind, argv, target, body, ttl, cleanup, acceptance, op, message, })
     }
     _ => Err("动作必须是 JSON 对象")
   }

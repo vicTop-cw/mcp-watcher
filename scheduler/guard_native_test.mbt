@@ -11,7 +11,7 @@
 // ============================================================================
 
 ///|
-fn quiet() -> @config.LoggingConfig {
+fn quiet_guard() -> @config.LoggingConfig {
   { enabled: false, log_dir: "", log_file: "mcp-watcher.log" }
 }
 
@@ -64,7 +64,7 @@ test "guard: pass executes actions" {
   )
   let policy = @action.build_policy(["cmd"])
   let _ = @scheduler.attach_rules(
-    [rule], bus, policy, "C:/tmp", quiet(), log, records,
+    [rule], bus, policy, "C:/tmp", quiet_guard(), log, records,
   )
   bus.publish("create.*", gmk_event("C:/tmp/g-pass.tmp"))
   // 动作真实执行 1 次（ok 日志），无 guard_fail
@@ -89,7 +89,7 @@ test "guard: fail + skip skips actions" {
   )
   let policy = @action.build_policy(["cmd"])
   let _ = @scheduler.attach_rules(
-    [rule], bus, policy, "C:/tmp", quiet(), log, records,
+    [rule], bus, policy, "C:/tmp", quiet_guard(), log, records,
   )
   bus.publish("create.*", gmk_event("C:/tmp/g-skip.tmp"))
   // actions 零执行
@@ -121,7 +121,7 @@ test "guard: fail + stop retires rule" {
   )
   let policy = @action.build_policy(["cmd"])
   let _ = @scheduler.attach_rules(
-    [rule], bus, policy, "C:/tmp", quiet(), log, records,
+    [rule], bus, policy, "C:/tmp", quiet_guard(), log, records,
   )
   bus.publish("create.*", gmk_event("C:/tmp/g-stop.tmp"))
   bus.publish("create.*", gmk_event("C:/tmp/g-stop.tmp"))
@@ -147,7 +147,7 @@ test "guard: program not in whitelist denied at runtime" {
   )
   let policy = @action.build_policy(["cmd"])
   let _ = @scheduler.attach_rules(
-    [rule], bus, policy, "C:/tmp", quiet(), log, records,
+    [rule], bus, policy, "C:/tmp", quiet_guard(), log, records,
   )
   bus.publish("create.*", gmk_event("C:/tmp/g-deny.tmp"))
   let guard_lines = log.val.filter(fn(l : String) { l.contains("guard_fail") })
@@ -193,7 +193,7 @@ test "guard + acceptance: guard passes, acceptance fails" {
   )
   let policy = @action.build_policy(["cmd"])
   let _ = @scheduler.attach_rules(
-    [rule], bus, policy, "C:/tmp", quiet(), log, records,
+    [rule], bus, policy, "C:/tmp", quiet_guard(), log, records,
   )
   bus.publish("create.*", gmk_event("C:/tmp/combo-acc.tmp"))
   // 守卫通过：无 guard_fail
@@ -236,7 +236,7 @@ test "guard + acceptance: guard fails, acceptance untouched" {
   )
   let policy = @action.build_policy(["cmd"])
   let _ = @scheduler.attach_rules(
-    [rule], bus, policy, "C:/tmp", quiet(), log, records,
+    [rule], bus, policy, "C:/tmp", quiet_guard(), log, records,
   )
   bus.publish("create.*", gmk_event("C:/tmp/combo-guard.tmp"))
   // 只有 guard_fail；动作零执行（不会误报 ok / acceptance_failed）

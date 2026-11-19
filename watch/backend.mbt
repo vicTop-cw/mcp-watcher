@@ -164,11 +164,14 @@ pub fn event_name(ev : FsEvent) -> String {
 ///   recursive   - 是否递归子目录
 ///   bus         - 事件总线（泛型类型跨包引用需完整类型标注）
 ///   debounce_ms - 去抖时长（毫秒，0 = 不去抖）
+///   paused      - 暂停门控（EP-01a；pause_watch 置 true 后事件不投递规则引擎，
+///                 resume_watch 恢复；内核级监控持续，暂停期事件被丢弃）
 pub fn subscribe_watch(
   path : String,
   recursive : Bool,
   bus : @rx.EventBus[FsEvent],
   debounce_ms~ : Int64,
+  paused~ : Ref[Bool] = Ref::Ref(false),
 ) -> Unit {
   let source = rx_watch_source(path, recursive)
   // 去抖在订阅链上做（development-plan §2 修正 #2）：
@@ -180,7 +183,10 @@ pub fn subscribe_watch(
   }
   let _ = obs.subscribe_on_next(fn(ev : @mon.WatchEvent) {
     let fe = from_rx_event(ev)
-    bus.publish(event_name(fe), fe)
+    // EP-01a 暂停门控：paused 期间事件不投递（resume 后恢复）
+    if !paused.val {
+      bus.publish(event_name(fe), fe)
+    }
   })
 }
 
@@ -246,10 +252,11 @@ pub async fn spawn_watch_task(
   recursive : Bool,
   bus : @rx.EventBus[FsEvent],
   debounce_ms~ : Int64,
+  paused~ : Ref[Bool] = Ref::Ref(false),
 ) -> Unit {
   @async.with_task_group(fn(group : @async.TaskGroup) {
     let _ = group.spawn(fn() {
-      subscribe_watch(path, recursive, bus, debounce_ms~)
+      subscribe_watch(path, recursive, bus, debounce_ms~, paused~)
     })
   })
 }

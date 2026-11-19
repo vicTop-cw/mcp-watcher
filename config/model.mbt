@@ -29,6 +29,8 @@ pub(all) enum LifecycleEventType {
   Destroyed
   /// 产物无效（验收门不过，schema v1.1；PLAN-gates.md §一）
   Invalid
+  /// 人工/规则记日志（EP-01a internal op log_event）
+  Logged
 }
 
 ///|
@@ -48,6 +50,7 @@ pub fn LifecycleEventType::to_string(self : LifecycleEventType) -> String {
     Expired => "product.expired"
     Destroyed => "product.destroyed"
     Invalid => "product.invalid"
+    Logged => "product.logged"
   }
 }
 
@@ -59,6 +62,7 @@ pub fn LifecycleEventType::from_string(s : String) -> LifecycleEventType? {
     "expired" => Some(Expired)
     "destroyed" => Some(Destroyed)
     "invalid" => Some(Invalid)
+    "logged" => Some(Logged)
     _ => None
   }
 }
@@ -181,6 +185,10 @@ pub(all) struct ActionSpec {
   cleanup : String
   /// 验收门（schema v1.1，仅 command 动作；None = v1.0 行为不变）
   acceptance : AcceptanceSpec?
+  /// internal 动作的 op 名（EP-01a；internal 必选，其余 kind 禁止携带）
+  op : String?
+  /// internal log_event 的日志消息（支持 schema §7 占位符；仅 internal）
+  message : String?
 }
 
 ///|
@@ -198,7 +206,26 @@ pub fn ActionSpec::new(
   body : String?,
   acceptance : AcceptanceSpec?,
 ) -> ActionSpec {
-  { kind, argv, target, body, ttl: 0, cleanup: "trash", acceptance, }
+  {
+    kind, argv, target, body, ttl: 0, cleanup: "trash",
+    acceptance, op: None, message: None,
+  }
+}
+
+///|
+/// 构造 internal 动作规格（EP-01a）
+pub fn ActionSpec::new_internal(op : String, message : String?) -> ActionSpec {
+  {
+    kind: "internal",
+    argv: None,
+    target: None,
+    body: None,
+    ttl: 0,
+    cleanup: "trash",
+    acceptance: None,
+    op: Some(op),
+    message,
+  }
 }
 
 ///|

@@ -642,6 +642,8 @@ pub(all) struct LifecycleEvent {
   path : String
   /// 时间戳（纳秒）
   timestamp_ns : Int64
+  /// 附加消息（EP-01a log_event；无消息时为空串，v1.0 事件不受影响）
+  message : String
 }
 
 ///|
@@ -651,12 +653,32 @@ pub extend LifecycleEvent with Eq::{not_equal, equal}
 pub extend LifecycleEvent with @moonbitlang/core/debug.Debug::{to_repr}
 
 ///|
-/// 构造生命周期事件
+/// 构造生命周期事件（message 缺省空串，向后兼容）
 pub fn LifecycleEvent::new(
   kind : @config.LifecycleEventType,
   path : String,
 ) -> LifecycleEvent {
-  { kind, path, timestamp_ns: Int64::from_int(@rx.real_now().to_int()), }
+  {
+    kind,
+    path,
+    timestamp_ns: Int64::from_int(@rx.real_now().to_int()),
+    message: "",
+  }
+}
+
+///|
+/// 构造带消息的生命周期事件（EP-01a log_event 用）
+pub fn LifecycleEvent::new_with_message(
+  kind : @config.LifecycleEventType,
+  path : String,
+  message : String,
+) -> LifecycleEvent {
+  {
+    kind,
+    path,
+    timestamp_ns: Int64::from_int(@rx.real_now().to_int()),
+    message,
+  }
 }
 
 ///|
@@ -694,6 +716,276 @@ pub fn exec_error_text(e : @rt.ExecError) -> String {
   }
 }
 
+// ============================================================================
+// EP-01a · 变量占位符渲染（schema §7）
+//
+// 纯函数、全目标可用：internal log_event 的 message 与 EP-01b webhook 的
+// url/body 复用同一机制。解析失败（未知变量 / 无扩展名）→ 空串替换 + warning，
+// 不中断动作链（schema §9）。
+// ============================================================================
+
+///|
+/// 路径的文件名部分（最后一个 / 或 \ 之后；无分隔符返回整串）
+pub fn path_name_of(path : String) -> String {
+  let a = path.to_array()
+  let n = a.length()
+  let mut last = -1
+  for i in 0..<n {
+    if a[i] == '/' || a[i] == '\\' {
+      last = i
+    }
+  }
+  if last < 0 {
+    return path
+  }
+  let out = Ref::Ref("")
+  for i in (last + 1)..<n {
+    out.val = out.val + a[i].to_string()
+  }
+  out.val
+}
+
+///|
+/// 路径的目录部分（最后一个 / 或 \ 之前；无分隔符返回空串）
+pub fn path_dir_of(path : String) -> String {
+  let a = path.to_array()
+  let n = a.length()
+  let mut last = -1
+  for i in 0..<n {
+    if a[i] == '/' || a[i] == '\\' {
+      last = i
+    }
+  }
+  if last < 0 {
+    return ""
+  }
+  let out = Ref::Ref("")
+  for i in 0..<last {
+    out.val = out.val + a[i].to_string()
+  }
+  out.val
+}
+
+///|
+/// 路径的扩展名（文件名最后一个点之后；无点 / 前导点（隐藏文件）/ 空扩展名 → None）
+pub fn path_ext_of(path : String) -> String? {
+  let a = path_name_of(path).to_array()
+  let n = a.length()
+  let mut last = -1
+  for i in 0..<n {
+    if a[i] == '.' {
+      last = i
+    }
+  }
+  if last <= 0 || last == n - 1 {
+    return None
+  }
+  let out = Ref::Ref("")
+  for i in (last + 1)..<n {
+    out.val = out.val + a[i].to_string()
+  }
+  Some(out.val)
+}
+
+///|
+/// 渲染 schema §7 变量占位符（单趟扫描，未知 `{` 按字面量保留）
+///
+/// 变量表（九项，无互相前缀冲突，匹配顺序无影响）：
+///   {file.path} {file.name} {file.dir} {file.ext} {file.size}
+///   {file.mtime} {event.type} {watch_dir} {watch_id}
+///
+/// 返回：(渲染结果, warning 列表)。解析失败 → 空串替换 + warning，不中断。
+pub fn render_placeholders(
+  template : String,
+  ev : @watch.FsEvent,
+  watch_dir : String,
+  watch_id : String,
+) -> (String, Array[String]) {
+  let chars = template.to_array()
+  let n = chars.length()
+  let vars : Array[(String, String?)] = [
+    ("{file.path}", Some(ev.path)),
+    ("{file.name}", Some(path_name_of(ev.path))),
+    ("{file.dir}", Some(path_dir_of(ev.path))),
+    ("{file.ext}", path_ext_of(ev.path)),
+    ("{file.size}", Some(ev.size.to_string())),
+    ("{file.mtime}", Some(ev.mtime.to_string())),
+    ("{event.type}", Some(ev.event_type.to_string())),
+    ("{watch_dir}", Some(watch_dir)),
+    ("{watch_id}", Some(watch_id)),
+  ]
+  let out = Ref::Ref("")
+  let warns = Ref::Ref([])
+  let mut i = 0
+  while i < n {
+    if chars[i] != '{' {
+      out.val = out.val + chars[i].to_string()
+      i = i + 1
+    } else {
+      let matched = Ref::Ref(false)
+      for (name, value) in vars {
+        if !matched.val && has_prefix_at(chars, i, name.to_array()) {
+          matched.val = true
+          i = i + name.length()
+          match value {
+            Some(v) => out.val = out.val + v
+            None => {
+              warns.val.push("变量解析失败，已替换为空串: " + name)
+            }
+          }
+        }
+      }
+      if !matched.val {
+        // 未知变量引用（{含至少一个点的标识符}）→ 空串 + warning（schema §9：
+        // 变量解析失败不中断动作链）；其余 '{'（如 JSON 字面量花括号）原样保留
+        match find_unknown_var_end(chars, i) {
+          Some(end) => {
+            let mut name = ""
+            let mut k = i
+            while k <= end {
+              name = name + chars[k].to_string()
+              k = k + 1
+            }
+            warns.val.push("变量解析失败，已替换为空串: " + name)
+            i = end + 1
+          }
+          None => {
+            out.val = out.val + "{"
+            i = i + 1
+          }
+        }
+      }
+    }
+  }
+  (out.val, warns.val)
+}
+
+///|
+/// 从 at 处（'{'）向前扫描：若其后是变量引用（标识符序列、至少含一个点、
+/// 以 '}' 收尾）返回 '}' 的下标；否则返回 None（字面量花括号）
+fn find_unknown_var_end(chars : Array[Char], at : Int32) -> Int32? {
+  let n = chars.length()
+  let mut j = at + 1
+  let mut has_dot = false
+  while j < n {
+    let cj = chars[j]
+    if cj == '}' {
+      if has_dot {
+        return Some(j)
+      }
+      return None
+    }
+    if !is_ident_char(cj) {
+      return None
+    }
+    if cj == '.' {
+      has_dot = true
+    }
+    j = j + 1
+  }
+  None
+}
+
+///|
+/// 变量引用扫描用的标识符字符（字母 / 数字 / 下划线 / 点）
+fn is_ident_char(c : Char) -> Bool {
+  (c >= 'a' && c <= 'z') ||
+    (c >= 'A' && c <= 'Z') ||
+    (c >= '0' && c <= '9') ||
+    c == '_' ||
+    c == '.'
+}
+
+///|
+/// chars 在 at 处是否以 name 开头（纯 Char 数组比较，UTF-8 安全）
+fn has_prefix_at(chars : Array[Char], at : Int32, name : Array[Char]) -> Bool {
+  if at + name.length() > chars.length() {
+    return false
+  }
+  for k in 0..<name.length() {
+    if chars[at + k] != name[k] {
+      return false
+    }
+  }
+  true
+}
+
+// ============================================================================
+// EP-01a · internal 动作注册表
+//
+// schema §5 扩展位落地：`op` → handler 的运行时注册表。四个 schema 枚举 op
+// （reload_config / pause_watch / resume_watch / log_event）由 scheduler 侧
+// build_internal_registry 直连既有函数注册；未知 op 返回可诊断错误（fail-closed）。
+// ============================================================================
+
+///|
+/// internal op 处理器：(动作规格, 触发事件, 监控根目录) → 执行结果
+///
+/// 注：函数类型位置不接受命名参数（仅值位置 fn 表达式允许 label），
+/// 用裸类型序且必须单行（rx task_exec 的 Handler 别名同款范式）。
+/// ⚠️ struct 定义字段列表**不允许尾逗号**（字面量允许）——实测踩坑。
+pub type InternalOpHandler = (@config.ActionSpec, @watch.FsEvent, String) -> ActionOutcome
+
+///|
+/// internal 动作注册表（op → handler）
+pub struct InternalRegistry {
+  handlers : Map[String, InternalOpHandler]
+}
+
+///|
+/// 构造空注册表
+pub fn InternalRegistry::new() -> InternalRegistry {
+  { handlers: Map([], capacity=4) }
+}
+
+///|
+/// 注册一个 internal op
+pub fn InternalRegistry::register(
+  reg : InternalRegistry,
+  op : String,
+  handler : InternalOpHandler,
+) -> Unit {
+  reg.handlers[op] = handler
+}
+
+///|
+/// 查询一个 internal op（未注册返回 None）
+pub fn InternalRegistry::lookup(
+  reg : InternalRegistry,
+  op : String,
+) -> InternalOpHandler? {
+  reg.handlers.get(op)
+}
+
+///|
+/// 执行 internal 动作（经注册表分派）
+///
+/// 返回契约（与 command 无验收分支一致）：
+///   - handler 成功（outcome.ok）→ Ok(outcome)
+///   - handler 失败 → Err(outcome.stderr)，由上层落「err:」日志与 -1 记录
+pub fn run_internal_action(
+  registry : InternalRegistry,
+  spec : @config.ActionSpec,
+  ev : @watch.FsEvent,
+  watch_dir : String,
+) -> Result[ActionOutcome, String] {
+  let op = match spec.op {
+    Some(o) => o
+    None => return Err("internal 动作缺少必填字段 op")
+  }
+  match registry.lookup(op) {
+    Some(handler) => {
+      let outcome = handler(spec, ev, watch_dir)
+      if outcome.ok {
+        Ok(outcome)
+      } else {
+        Err(outcome.stderr)
+      }
+    }
+    None => Err("internal op 未注册: " + op)
+  }
+}
+
 ///|
 /// 按动作规格执行（带日志记录）
 ///
@@ -701,7 +993,7 @@ pub fn exec_error_text(e : @rt.ExecError) -> String {
 ///   - `command`      → rx run_command + ExecPolicy（已接入）
 ///   - `mcp_tool_call`→ 待实现（EP-01 扩展位），返回可诊断错误
 ///   - `webhook`      → 待实现（EP-01 扩展位），返回可诊断错误
-///   - `internal`     → 待实现（EP-01 扩展位），内部动作注册表尚未建立
+///   - `internal`     → internal 动作注册表分派（EP-01a 已接入）
 ///
 /// 参数：
 ///   spec   - 动作规格
@@ -709,6 +1001,7 @@ pub fn exec_error_text(e : @rt.ExecError) -> String {
 ///   policy - 执行策略（command 动作用；其他动作忽略）
 ///   logging_config - 日志配置（用于控制日志输出）
 ///   watch_dir - 监控根目录（acceptance.artifact_glob 相对它解析）
+///   registry - internal 动作注册表（EP-01a；缺省空注册表 ⇒ internal 报未注册）
 ///
 /// 返回契约（v1.1）：
 ///   - 无 acceptance：v1.0 不变（command 成功 Ok / 失败 Err）
@@ -721,6 +1014,7 @@ pub fn run_action(
   policy : @rt.ExecPolicy,
   logging_config : @config.LoggingConfig,
   watch_dir : String,
+  registry~ : InternalRegistry = InternalRegistry::new(),
 ) -> Result[ActionOutcome, String] {
   // 记录执行开始时间
   let start_time_ns = Int64::from_int(@rx.real_now().to_int())
@@ -757,10 +1051,7 @@ pub fn run_action(
       Err(
         "action webhook 待实现（EP-01 动作扩展）：需要 HTTP 客户端接入",
       )
-    "internal" =>
-      Err(
-        "action internal 待实现（EP-01 动作扩展）：内部动作注册表尚未建立",
-      )
+    "internal" => run_internal_action(registry, spec, ev, watch_dir)
     other => Err("未知 action kind: " + other)
   }
 

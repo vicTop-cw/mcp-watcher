@@ -15,7 +15,9 @@ options(
   "allow-experimental-packages": [ "moonbitlang/core/async" ],
   // guard_native_test.mbt 走真实 Windows cmd 命令（守卫门 exit 语义 + 组合场景），
   // js/wasm 下命令行为不一致，门控为 native 专属（与 action 包同范式）。
+  // internal_wiring_test.mbt 的 reload 用例需 @mon.fs_write_atomic 写临时规则文件。
   targets: {
     "guard_native_test.mbt": [ "native" ],
+    "internal_wiring_test.mbt": [ "native" ],
   },
 )

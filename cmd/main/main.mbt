@@ -212,6 +212,10 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
   let log : Ref[Array[String]] = Ref::Ref([])
   let records : Ref[Array[@scheduler.ExecRecord]] = Ref::Ref([])
   let policy = @action.build_policy(@scheduler.allowed_programs(cfg))
+  // EP-01a：internal 动作上下文（reload_config 复用 CLI reload 通道；
+  // paused 门控共享给 watch 订阅）
+  let state = @scheduler.WatcherState::new(args.rules, cfg.watch_id, cfg.watch_dir)
+  let reg = @scheduler.build_internal_registry(state)
   let n = @scheduler.attach_rules(
     cfg.rules,
     bus,
@@ -220,6 +224,7 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
     cfg.logging,
     log,
     records,
+    registry=reg,
   )
   println("  已注册订阅：" + n.to_string())
 
@@ -269,6 +274,7 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
         cfg.recursive,
         bus,
         debounce_ms=cfg.debounce_ms.to_int64(),
+        paused=state.paused,
       )
     })
     // 等待任务完成（stop-after 触发时，watch 任务会自然结束）
@@ -767,6 +773,10 @@ async fn cmd_run_once(args : CliArgs) -> Unit {
   let log : Ref[Array[String]] = Ref::Ref([])
   let records : Ref[Array[@scheduler.ExecRecord]] = Ref::Ref([])
 
+  // EP-01a：internal 动作上下文（与 run_daemon 同款接线）
+  let state = @scheduler.WatcherState::new(args.rules, cfg.watch_id, watch_dir)
+  let reg = @scheduler.build_internal_registry(state)
+
   // 挂载规则
   let n = @scheduler.attach_rules(
     cfg.rules,
@@ -776,6 +786,7 @@ async fn cmd_run_once(args : CliArgs) -> Unit {
     cfg.logging,
     log,
     records,
+    registry=reg,
   )
   println("  已注册订阅：" + n.to_string())
 
@@ -796,6 +807,7 @@ async fn cmd_run_once(args : CliArgs) -> Unit {
         cfg.recursive,
         bus,
         debounce_ms=cfg.debounce_ms.to_int64(),
+        paused=state.paused,
       )
     })
   })

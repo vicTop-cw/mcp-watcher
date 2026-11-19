@@ -605,3 +605,78 @@ test "guard: program not in whitelist loads with warning" {
     Err(_) => assert_true(false)
   }
 }
+
+// ============================================================================
+// EP-01a · internal 动作解析（op 必选 / message 仅 internal / fail-closed）
+// ============================================================================
+
+///|
+/// internal 动作：op + message 正常解析
+test "internal: op and message parse" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"internal\",\"op\":\"log_event\",\"message\":\"hit {file.name}\"}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(cfg) => {
+      let a = cfg.rules[0].actions[0]
+      assert_eq(a.kind, "internal")
+      match a.op {
+        Some("log_event") => ()
+        _ => assert_true(false)
+      }
+      match a.message {
+        Some(m) => assert_eq(m, "hit {file.name}")
+        None => assert_true(false)
+      }
+    }
+    Err(e) => assert_true(false) // e
+  }
+}
+
+///|
+/// internal 动作：缺 op → schema 错（fail-closed）
+test "internal: missing op is schema error" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"internal\"}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(_) => assert_true(false)
+    Err(e) => assert_true(e.contains("op"))
+  }
+}
+
+///|
+/// 非 internal 动作携带 op → schema 错（fail-closed）
+test "internal: op on non-internal kind is schema error" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"],\"op\":\"log_event\"}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(_) => assert_true(false)
+    Err(e) => assert_true(e.contains("op"))
+  }
+}
+
+///|
+/// 非 internal 动作携带 message → schema 错（fail-closed）
+test "internal: message on non-internal kind is schema error" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"],\"message\":\"x\"}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(_) => assert_true(false)
+    Err(e) => assert_true(e.contains("message"))
+  }
+}
+
+///|
+/// 向后兼容锁：v1.0 command 动作解析结果 op/message 为 None
+test "internal: v1.0 command action unaffected" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(cfg) => {
+      let a = cfg.rules[0].actions[0]
+      match a.op {
+        None => ()
+        Some(_) => assert_true(false)
+      }
+      match a.message {
+        None => ()
+        Some(_) => assert_true(false)
+      }
+    }
+    Err(_) => assert_true(false)
+  }
+}

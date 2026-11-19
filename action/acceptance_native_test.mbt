@@ -10,12 +10,12 @@
 // ============================================================================
 
 ///|
-fn quiet() -> @config.LoggingConfig {
+fn quiet_acc() -> @config.LoggingConfig {
   { enabled: false, log_dir: "", log_file: "mcp-watcher.log" }
 }
 
 ///|
-fn mk_ev() -> @watch.FsEvent {
+fn mk_ev_acc() -> @watch.FsEvent {
   @watch.FsEvent::new(
     @config.EventType::Create,
     "C:/tmp/acceptance.tmp",
@@ -66,7 +66,7 @@ test "run_command_action: acceptance pass on real command" {
     Some(@config.AcceptanceSpec::new(0, ["DONE"], [], [], None)),
   )
   let policy = @action.build_policy(["cmd"])
-  let outcome = @action.run_command_action(spec, mk_ev(), policy, "C:/tmp")
+  let outcome = @action.run_command_action(spec, mk_ev_acc(), policy, "C:/tmp")
   assert_true(outcome.ok)
   assert_true(outcome.accepted)
   assert_eq(outcome.exit_code, 0)
@@ -84,7 +84,7 @@ test "run_command_action: acceptance fail keeps real exit and output" {
     Some(@config.AcceptanceSpec::new(0, [], ["DONE"], [], None)),
   )
   let policy = @action.build_policy(["cmd"])
-  let outcome = @action.run_command_action(spec, mk_ev(), policy, "C:/tmp")
+  let outcome = @action.run_command_action(spec, mk_ev_acc(), policy, "C:/tmp")
   assert_false(outcome.accepted)
   assert_eq(outcome.exit_code, 0) // 保留真实退出码
   assert_true(outcome.stdout.contains("DONE")) // 保留输出原文
@@ -101,7 +101,7 @@ test "run_command_action: v1.0 behavior without acceptance" {
     None,
   )
   let policy = @action.build_policy(["cmd"])
-  let outcome = @action.run_command_action(spec, mk_ev(), policy, "C:/tmp")
+  let outcome = @action.run_command_action(spec, mk_ev_acc(), policy, "C:/tmp")
   assert_false(outcome.ok)
   assert_eq(outcome.exit_code, -1)
   assert_false(outcome.accepted)
@@ -120,7 +120,7 @@ test "run_command_action: nonzero exit recovers real code with acceptance" {
     Some(@config.AcceptanceSpec::new(1, [], [], [], None)),
   )
   let policy = @action.build_policy(["cmd"])
-  let outcome = @action.run_command_action(spec, mk_ev(), policy, "C:/tmp")
+  let outcome = @action.run_command_action(spec, mk_ev_acc(), policy, "C:/tmp")
   assert_eq(outcome.exit_code, 1)
   assert_true(outcome.accepted)
 
@@ -132,7 +132,7 @@ test "run_command_action: nonzero exit recovers real code with acceptance" {
     None,
     Some(@config.AcceptanceSpec::new(0, [], [], [], None)),
   )
-  let outcome2 = @action.run_command_action(spec2, mk_ev(), policy, "C:/tmp")
+  let outcome2 = @action.run_command_action(spec2, mk_ev_acc(), policy, "C:/tmp")
   assert_eq(outcome2.exit_code, 1)
   assert_false(outcome2.accepted)
 }
@@ -148,7 +148,7 @@ test "run_action: acceptance fail returns Ok with accepted=false" {
     Some(@config.AcceptanceSpec::new(0, ["GOOD"], [], [], None)),
   )
   let policy = @action.build_policy(["cmd"])
-  match @action.run_action(spec, mk_ev(), policy, quiet(), "C:/tmp") {
+  match @action.run_action(spec, mk_ev_acc(), policy, quiet_acc(), "C:/tmp") {
     Ok(o) => {
       assert_false(o.accepted)
       assert_eq(o.exit_code, 0)
@@ -168,7 +168,7 @@ test "run_action: acceptance pass returns Ok with accepted=true" {
     Some(@config.AcceptanceSpec::new(0, ["GOOD"], [], [], None)),
   )
   let policy = @action.build_policy(["cmd"])
-  match @action.run_action(spec, mk_ev(), policy, quiet(), "C:/tmp") {
+  match @action.run_action(spec, mk_ev_acc(), policy, quiet_acc(), "C:/tmp") {
     Ok(o) => assert_true(o.accepted)
     Err(_) => assert_true(false)
   }
@@ -185,7 +185,7 @@ test "run_action: v1.0 nonzero exit still Err" {
     None,
   )
   let policy = @action.build_policy(["cmd"])
-  match @action.run_action(spec, mk_ev(), policy, quiet(), "C:/tmp") {
+  match @action.run_action(spec, mk_ev_acc(), policy, quiet_acc(), "C:/tmp") {
     Ok(_) => assert_true(false)
     // v1.0 错误文本格式（exec_error_text 映射，中文）
     Err(e) => assert_true(e.contains("退出码 1"))
