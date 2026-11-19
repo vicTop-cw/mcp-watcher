@@ -16,6 +16,7 @@ fn mk_rule(
     Some(["cmd", "/c", "echo", id]),
     None,
     None,
+    None,
   )
   @config.Rule::new(id, events, ["*.tmp"], [], None, [action], once, priority)
 }
@@ -60,6 +61,7 @@ test "once 语义：同一事件 publish 两次只执行一次" {
     [rule],
     bus,
     policy,
+    "C:/tmp",
     quiet_logging(),
     log,
     records,
@@ -86,6 +88,7 @@ test "非 once：同一事件 publish 两次执行两次" {
     [rule],
     bus,
     policy,
+    "C:/tmp",
     quiet_logging(),
     log,
     records,

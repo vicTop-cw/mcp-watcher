@@ -32,7 +32,7 @@ pub trait Action {
 pub(all) struct ActionOutcome {
   /// 动作种类
   kind : String
-  /// 是否成功
+  /// 是否成功（v1.0 语义：command 动作 exit_code == 0）
   ok : Bool
   /// 退出码（command 动作为 0；其他动作为 -1）
   exit_code : Int32
@@ -40,6 +40,10 @@ pub(all) struct ActionOutcome {
   stdout : String
   /// 标准错误
   stderr : String
+  /// 验收门判定（schema v1.1；无 acceptance 时等于 ok，v1.0 行为不变）
+  accepted : Bool
+  /// 验收失败原因（通过或无验收时为空）
+  acceptance_reason : String
 }
 
 ///|
@@ -49,7 +53,7 @@ pub extend ActionOutcome with Eq::{not_equal, equal}
 pub extend ActionOutcome with @moonbitlang/core/debug.Debug::{to_repr}
 
 ///|
-/// 构造动作执行结果
+/// 构造动作执行结果（v1.0 语义：accepted = ok）
 pub fn ActionOutcome::new(
   kind : String,
   ok : Bool,
@@ -57,7 +61,7 @@ pub fn ActionOutcome::new(
   stdout : String,
   stderr : String,
 ) -> ActionOutcome {
-  { kind, ok, exit_code, stdout, stderr, }
+  { kind, ok, exit_code, stdout, stderr, accepted: ok, acceptance_reason: "", }
 }
 
 ///|
@@ -76,19 +80,151 @@ pub fn build_policy(allow_programs : Array[String]) -> @rt.ExecPolicy {
   @rt.ExecPolicy::new(allow, false, 60.0)
 }
 
+// ============================================================================
+// 验收门（schema v1.1 · PLAN-gates.md §一：堵「假绿」）
+// ============================================================================
+
+///|
+/// 验收判定结果
+#derive(Eq, Debug)
+pub(all) struct AcceptanceResult {
+  /// 是否通过验收
+  accepted : Bool
+  /// 失败原因（通过时为空；多项失败累积，一次报全）
+  reason : String
+}
+
+///|
+pub extend AcceptanceResult with Eq::{not_equal, equal}
+
+///|
+pub extend AcceptanceResult with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+/// 构造验收判定结果
+pub fn AcceptanceResult::new(accepted : Bool, reason : String) -> AcceptanceResult {
+  { accepted, reason, }
+}
+
+///|
+/// 验收门纯函数判定（红线：纯函数——字符串包含 + 调用方注入的 artifact_hit）
+///
+/// 语义（与 PLAN-gates.md §一 语义表逐条对齐）：
+///   - exit_code == expect_exit（缺省 0）
+///   - stdout 包含 stdout_contains 每一项（AND）
+///   - stdout 不含 stdout_not_contains 任何一项
+///   - stderr 不含 stderr_not_contains 任何一项
+///   - artifact_glob：调用方解析后注入 artifact_hit（None = 无该检查）
+///
+/// 多项失败一次报全（累积式，与 validate_config 同风格）；**不做自动重试**
+/// （重试留给上层，如 fist-mbt saga）。
+pub fn acceptance_check(
+  acceptance : @config.AcceptanceSpec,
+  exit_code : Int32,
+  stdout : String,
+  stderr : String,
+  artifact_hit : Bool?,
+) -> AcceptanceResult {
+  let reasons : Array[String] = []
+  if exit_code != acceptance.expect_exit {
+    reasons.push(
+      "exit_code=" +
+      exit_code.to_string() +
+      " != expect_exit=" +
+      acceptance.expect_exit.to_string(),
+    )
+  }
+  for s in acceptance.stdout_contains {
+    if !stdout.contains(s) {
+      reasons.push("stdout 缺少应含内容: " + s)
+    }
+  }
+  for s in acceptance.stdout_not_contains {
+    if stdout.contains(s) {
+      reasons.push("stdout 含禁止内容: " + s)
+    }
+  }
+  for s in acceptance.stderr_not_contains {
+    if stderr.contains(s) {
+      reasons.push("stderr 含禁止内容: " + s)
+    }
+  }
+  match (acceptance.artifact_glob, artifact_hit) {
+    (Some(_), Some(true)) => ()
+    (Some(g), Some(false)) => reasons.push("artifact_glob 无命中: " + g)
+    (Some(g), None) => reasons.push("artifact_glob 未能解析: " + g)
+    (None, _) => ()
+  }
+  if reasons.length() == 0 {
+    AcceptanceResult::new(true, "")
+  } else {
+    AcceptanceResult::new(false, reasons.join("; "))
+  }
+}
+
+///|
+/// 从 rx 非零退出错误文本恢复真实退出码与 stderr
+///
+/// rx 0.4.4 契约（rhop_task task_exec）：非零退出走
+/// on_error(SpawnFailed("退出码 N[；stderr: S]"))，经 exec_error_text
+/// 映射为 "执行失败: 退出码 N[；stderr: S]"。本函数按该固定格式解析
+/// （格式与 moon.mod 锁定的 RX-MBT 0.4.4 绑定）；策略拒绝等其他错误
+/// 格式返回 None（调用方保持 v1.0 的 exit_code=-1 语义）。
+///
+/// 注意：rx 非零路径不交付 stdout（Observable 层丢弃），本函数只能恢复
+/// exit_code 与 stderr——这是 rx 侧限制，诚实标注。
+pub fn parse_exit_error(text : String) -> (Int32, String)? {
+  let prefix = "执行失败: 退出码 "
+  if !text.has_prefix(prefix) {
+    return None
+  }
+  let rest = text[prefix.length():].to_owned()
+  let a = rest.to_array()
+  let n = a.length()
+  let mut i = 0
+  while i < n {
+    let ch = a[i]
+    if ch >= '0' && ch <= '9' {
+      i = i + 1
+    } else {
+      break
+    }
+  }
+  if i == 0 {
+    return None
+  }
+  match @util.parse_int(rest[0:i].to_owned()) {
+    None => None
+    Some(c) => {
+      let tail = rest[i:].to_owned()
+      let sep = "；stderr: "
+      if tail.has_prefix(sep) {
+        Some((c, tail[sep.length():].to_owned()))
+      } else {
+        Some((c, ""))
+      }
+    }
+  }
+}
+
 ///|
 /// 执行 command 动作（同步等待结果）
 ///
 /// 参数：
-///   spec   - 动作规格（kind 必须是 "command"，argv 必须非空）
-///   ev     - 触发事件（用于未来的变量占位展开）
-///   policy - 执行策略（白名单）
+///   spec      - 动作规格（kind 必须是 "command"，argv 必须非空）
+///   ev        - 触发事件（用于未来的变量占位展开）
+///   policy    - 执行策略（白名单）
+///   watch_dir - 监控根目录（acceptance.artifact_glob 相对它解析；无验收时不用）
 ///
-/// 返回：动作执行结果。失败时 `ok=false` 且 `stderr` 携带可诊断原因。
+/// 返回：动作执行结果。
+///   - 无 acceptance：v1.0 行为不变（ok = exit_code == 0，accepted = ok）
+///   - 有 acceptance：验收不过时 accepted=false，保留真实 exit_code 与输出原文
+///     （非零退出经 parse_exit_error 从 rx on_error 文本恢复）
 pub fn run_command_action(
   spec : @config.ActionSpec,
   ev : @watch.FsEvent,
   policy : @rt.ExecPolicy,
+  watch_dir : String,
 ) -> ActionOutcome {
   let _ = ev
   let argv = match spec.argv {
@@ -121,25 +257,85 @@ pub fn run_command_action(
     err.val = Some(exec_error_text(e))
   })
   match result.val {
-    Some(r) =>
-      ActionOutcome::new(
-        "command",
-        r.exit_code == 0,
-        r.exit_code,
-        r.stdout,
-        r.stderr,
-      )
-    None =>
-      ActionOutcome::new(
-        "command",
-        false,
-        -1,
-        "",
-        match err.val {
-          Some(e) => e
-          None => "command 执行未产出结果"
-        },
-      )
+    Some(r) => {
+      let ok = r.exit_code == 0
+      match spec.acceptance {
+        None =>
+          // v1.0 行为（向后兼容锁）
+          ActionOutcome::new(
+            "command",
+            ok,
+            r.exit_code,
+            r.stdout,
+            r.stderr,
+          )
+        Some(acc) => {
+          let hit = match acc.artifact_glob {
+            Some(g) => Some(artifact_glob_hit(watch_dir, g))
+            None => None
+          }
+          let res = acceptance_check(acc, r.exit_code, r.stdout, r.stderr, hit)
+          {
+            kind: "command",
+            ok,
+            exit_code: r.exit_code,
+            stdout: r.stdout,
+            stderr: r.stderr,
+            accepted: res.accepted,
+            acceptance_reason: res.reason,
+          }
+        }
+      }
+    }
+    None => {
+      let err_text = match err.val {
+        Some(e) => e
+        None => "command 执行未产出结果"
+      }
+      match spec.acceptance {
+        None =>
+          // v1.0 行为（向后兼容锁）：非零退出 exit_code=-1，原因入 stderr
+          ActionOutcome::new(
+            "command",
+            false,
+            -1,
+            "",
+            err_text,
+          )
+        Some(acc) =>
+          match parse_exit_error(err_text) {
+            Some((code, real_stderr)) => {
+              let hit = match acc.artifact_glob {
+                Some(g) => Some(artifact_glob_hit(watch_dir, g))
+                None => None
+              }
+              let res = acceptance_check(acc, code, "", real_stderr, hit)
+              {
+                kind: "command",
+                ok: code == 0,
+                exit_code: code,
+                stdout: "",
+                stderr: real_stderr,
+                accepted: res.accepted,
+                acceptance_reason: res.reason,
+              }
+            }
+            None => {
+              // 策略拒绝 / 启动失败 / 超时：无真实退出码，保持 -1
+              let res = acceptance_check(acc, -1, "", err_text, None)
+              {
+                kind: "command",
+                ok: false,
+                exit_code: -1,
+                stdout: "",
+                stderr: err_text,
+                accepted: res.accepted,
+                acceptance_reason: res.reason,
+              }
+            }
+          }
+      }
+    }
   }
 }
 
@@ -458,22 +654,45 @@ pub fn exec_error_text(e : @rt.ExecError) -> String {
 ///   ev     - 触发事件
 ///   policy - 执行策略（command 动作用；其他动作忽略）
 ///   logging_config - 日志配置（用于控制日志输出）
+///   watch_dir - 监控根目录（acceptance.artifact_glob 相对它解析）
+///
+/// 返回契约（v1.1）：
+///   - 无 acceptance：v1.0 不变（command 成功 Ok / 失败 Err）
+///   - 有 acceptance：无论过与否都返回 Ok(outcome)——验收不过是"完成了
+///     判定的执行"，判定在 outcome.accepted 上；同时发出 product.invalid
+///     生命周期事件（进入既有 TTL/trash 回收流的语义入口），不做自动重试
 pub fn run_action(
   spec : @config.ActionSpec,
   ev : @watch.FsEvent,
   policy : @rt.ExecPolicy,
   logging_config : @config.LoggingConfig,
+  watch_dir : String,
 ) -> Result[ActionOutcome, String] {
   // 记录执行开始时间
   let start_time_ns = Int64::from_int(@rx.real_now().to_int())
 
   let result = match spec.kind {
     "command" => {
-      let outcome = run_command_action(spec, ev, policy)
-      if outcome.ok {
-        Ok(outcome)
-      } else {
-        Err(outcome.stderr)
+      let outcome = run_command_action(spec, ev, policy, watch_dir)
+      match (spec.acceptance, outcome.accepted) {
+        (Some(_), false) => {
+          // 验收不过：发出 product.invalid 生命周期事件（可诊断日志），
+          // 保留真实 exit_code 与输出原文；不做自动重试（重试留给上层）
+          let inv = LifecycleEvent::new(
+            @config.LifecycleEventType::Invalid,
+            ev.path,
+          )
+          println(
+            "[lifecycle] " +
+            inv.event_name() +
+            " path=" +
+            inv.path +
+            " reason=" +
+            outcome.acceptance_reason,
+          )
+          Ok(outcome)
+        }
+        _ => if outcome.ok { Ok(outcome) } else { Err(outcome.stderr) }
       }
     }
     "mcp_tool_call" =>
@@ -497,11 +716,16 @@ pub fn run_action(
   // 如果日志启用，输出日志
   if logging_config.enabled {
     let status = match result {
-      Ok(_) => "success"
+      Ok(outcome) => if outcome.accepted { "success" } else { "acceptance_failed" }
       Err(_) => "failure"
     }
     let result_summary = match result {
-      Ok(outcome) => "exit_code=" + outcome.exit_code.to_string()
+      Ok(outcome) =>
+        if outcome.accepted {
+          "exit_code=" + outcome.exit_code.to_string()
+        } else {
+          "exit_code=" + outcome.exit_code.to_string() + " " + outcome.acceptance_reason
+        }
       Err(err) => "error=" + err
     }
     let duration_ms = (end_time_ns - start_time_ns).to_int() / 1000000

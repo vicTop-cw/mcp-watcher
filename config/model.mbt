@@ -27,6 +27,8 @@ pub(all) enum LifecycleEventType {
   Expired
   /// 产物销毁（移入回收目录）
   Destroyed
+  /// 产物无效（验收门不过，schema v1.1；PLAN-gates.md §一）
+  Invalid
 }
 
 ///|
@@ -45,6 +47,7 @@ pub fn LifecycleEventType::to_string(self : LifecycleEventType) -> String {
     Created => "product.created"
     Expired => "product.expired"
     Destroyed => "product.destroyed"
+    Invalid => "product.invalid"
   }
 }
 
@@ -55,6 +58,7 @@ pub fn LifecycleEventType::from_string(s : String) -> LifecycleEventType? {
     "created" => Some(Created)
     "expired" => Some(Expired)
     "destroyed" => Some(Destroyed)
+    "invalid" => Some(Invalid)
     _ => None
   }
 }
@@ -112,6 +116,54 @@ pub fn ConditionSpec::new(kind : String, expr : String) -> ConditionSpec {
 }
 
 ///|
+/// 验收门规格（schema v1.1  ActionSpec 可选字段  PLAN-gates.md §一）
+///
+/// 全部缺省时等价于 v1.0 的 `exit_code == 0` 判定。
+/// 字段语义（与计划文档逐条对齐）：
+///   - expect_exit：exit_code == expect_exit
+///   - stdout_contains：stdout 包含每一项（AND）
+///   - stdout_not_contains：stdout 不含任何一项
+///   - stderr_not_contains：stderr 不含任何一项
+///   - artifact_glob：相对 watch_dir 的 glob，至少命中 1 个文件
+#derive(Eq, Debug)
+pub(all) struct AcceptanceSpec {
+  /// 期望退出码（缺省 0）
+  expect_exit : Int32
+  /// stdout 必须包含每一项（AND）
+  stdout_contains : Array[String]
+  /// stdout 不得包含任何一项
+  stdout_not_contains : Array[String]
+  /// stderr 不得包含任何一项
+  stderr_not_contains : Array[String]
+  /// 相对 watch_dir 的 glob（无 = 不做该检查）
+  artifact_glob : String?
+}
+
+///|
+pub extend AcceptanceSpec with Eq::{not_equal, equal}
+
+///|
+pub extend AcceptanceSpec with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+/// 构造验收门规格
+pub fn AcceptanceSpec::new(
+  expect_exit : Int32,
+  stdout_contains : Array[String],
+  stdout_not_contains : Array[String],
+  stderr_not_contains : Array[String],
+  artifact_glob : String?,
+) -> AcceptanceSpec {
+  {
+    expect_exit,
+    stdout_contains,
+    stdout_not_contains,
+    stderr_not_contains,
+    artifact_glob,
+  }
+}
+
+///|
 /// 动作规格（声明式动作；具体执行见 action 包，语义化而非裸命令）
 #derive(Eq, Debug)
 pub(all) struct ActionSpec {
@@ -127,6 +179,8 @@ pub(all) struct ActionSpec {
   ttl : Int32
   /// 清理动作：trash（移入回收目录）/ rm（直接删除，默认 trash）
   cleanup : String
+  /// 验收门（schema v1.1，仅 command 动作；None = v1.0 行为不变）
+  acceptance : AcceptanceSpec?
 }
 
 ///|
@@ -142,8 +196,9 @@ pub fn ActionSpec::new(
   argv : Array[String]?,
   target : String?,
   body : String?,
+  acceptance : AcceptanceSpec?,
 ) -> ActionSpec {
-  { kind, argv, target, body, ttl: 0, cleanup: "trash", }
+  { kind, argv, target, body, ttl: 0, cleanup: "trash", acceptance, }
 }
 
 ///|

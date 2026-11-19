@@ -69,6 +69,7 @@ pub fn ExecRecord::new(
 ///   rules  - 规则表
 ///   bus   - 事件总线
 ///   policy - 执行策略（command 动作用）
+///   watch_dir - 监控根目录（acceptance.artifact_glob 相对它解析）
 ///   logging_config - 日志配置
 ///   log   - 执行日志累加器（Ref 间接传递，闭包内无法直接改外层变量）
 ///   records - 真实执行记录累加器（每条动作执行后写入一条）
@@ -78,6 +79,7 @@ pub fn attach_rules(
   rules : Array[@config.Rule],
   bus : @rx.EventBus[@watch.FsEvent],
   policy : @rt.ExecPolicy,
+  watch_dir : String,
   logging_config : @config.LoggingConfig,
   log : Ref[Array[String]],
   records : Ref[Array[ExecRecord]],
@@ -106,28 +108,57 @@ pub fn attach_rules(
         let matched = @rule.dispatch([rule], fe)
         if matched.length() > 0 {
           for a in rule.actions {
-            match @action.run_action(a, fe, policy, logging_config) {
+            match @action.run_action(a, fe, policy, logging_config, watch_dir) {
               Ok(o) => {
-                log.val.push(
-                  "rule " +
-                  rule.id +
-                  " action " +
-                  a.kind +
-                  " ok exit=" +
-                  o.exit_code.to_string(),
-                )
-                // 真实执行记录：字段直接取自命中规则 / 事件 / 动作结果
-                records.val.push(
-                  ExecRecord::new(
-                    rule.id,
-                    fe.event_type.to_string(),
-                    fe.path,
-                    a.kind,
-                    o.exit_code,
-                    o.stdout,
-                    o.stderr,
-                  ),
-                )
+                if o.accepted {
+                  log.val.push(
+                    "rule " +
+                    rule.id +
+                    " action " +
+                    a.kind +
+                    " ok exit=" +
+                    o.exit_code.to_string(),
+                  )
+                  // 真实执行记录：字段直接取自命中规则 / 事件 / 动作结果
+                  records.val.push(
+                    ExecRecord::new(
+                      rule.id,
+                      fe.event_type.to_string(),
+                      fe.path,
+                      a.kind,
+                      o.exit_code,
+                      o.stdout,
+                      o.stderr,
+                    ),
+                  )
+                } else {
+                  // 验收不过（schema v1.1）：保留真实 exit/stdout，
+                  // stderr 记录验收原因（命令已真实执行，exit_code 不是 -1）
+                  log.val.push(
+                    "rule " +
+                    rule.id +
+                    " action " +
+                    a.kind +
+                    " acceptance_failed exit=" +
+                    o.exit_code.to_string() +
+                    ": " +
+                    o.acceptance_reason,
+                  )
+                  let note = "acceptance failed: " +
+                    o.acceptance_reason +
+                    (if o.stderr == "" { "" } else { " | exec: " + o.stderr })
+                  records.val.push(
+                    ExecRecord::new(
+                      rule.id,
+                      fe.event_type.to_string(),
+                      fe.path,
+                      a.kind,
+                      o.exit_code,
+                      o.stdout,
+                      note,
+                    ),
+                  )
+                }
               }
               Err(e) => {
                 log.val.push(
@@ -205,7 +236,15 @@ pub async fn run_scheduler(config : @config.Config) -> Result[String, String] {
   let records : Ref[Array[ExecRecord]] = Ref::Ref([])
   // 执行策略：允许清单为空（安全默认——不因配置而执行任意命令）
   let policy = @action.build_policy(allowed_programs(config))
-  let n = attach_rules(config.rules, bus, policy, config.logging, log, records)
+  let n = attach_rules(
+    config.rules,
+    bus,
+    policy,
+    config.watch_dir,
+    config.logging,
+    log,
+    records,
+  )
   // 启动后台监控任务（rx 订阅同步阻塞，故必须放独立 async 任务）
   // 使用 with_task_group 管理后台任务生命周期
   @async.with_task_group(fn(group : @async.TaskGroup) {
@@ -248,6 +287,8 @@ pub fn allowed_programs(config : @config.Config) -> Array[String] {
 ///   rules  - 规则表
 ///   ev     - 触发事件
 ///   policy - 执行策略
+///   logging_config - 日志配置
+///   watch_dir - 监控根目录（acceptance.artifact_glob 相对它解析）
 ///
 /// 返回：执行日志
 pub fn run_once(
@@ -255,21 +296,33 @@ pub fn run_once(
   ev : @watch.FsEvent,
   policy : @rt.ExecPolicy,
   logging_config : @config.LoggingConfig,
+  watch_dir : String,
 ) -> Array[String] {
   let matched = @rule.dispatch(rules, ev)
   let log : Array[String] = []
   for r in matched {
     for a in r.actions {
-      match @action.run_action(a, ev, policy, logging_config) {
+      match @action.run_action(a, ev, policy, logging_config, watch_dir) {
         Ok(o) =>
-          log.push(
-            "rule " +
-            r.id +
-            " action " +
-            a.kind +
-            " ok exit=" +
-            o.exit_code.to_string(),
-          )
+          if o.accepted {
+            log.push(
+              "rule " +
+              r.id +
+              " action " +
+              a.kind +
+              " ok exit=" +
+              o.exit_code.to_string(),
+            )
+          } else {
+            log.push(
+              "rule " +
+              r.id +
+              " action " +
+              a.kind +
+              " acceptance_failed: " +
+              o.acceptance_reason,
+            )
+          }
         Err(e) => log.push("rule " + r.id + " action " + a.kind + " err: " + e)
       }
     }

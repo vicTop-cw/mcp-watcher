@@ -76,6 +76,86 @@ fn parse_condition(v : Json?) -> ConditionSpec? {
 }
 
 ///|
+/// 严格字符串数组解析（fail-closed：非字符串元素 / 非数组一律报错）
+fn parse_str_array(v : Json, field : String) -> Result[Array[String], String] {
+  match v {
+    Array(items) => {
+      let out : Array[String] = []
+      for it in items {
+        match it {
+          String(s) => out.push(s)
+          _ => return Err(field + " 必须是字符串数组")
+        }
+      }
+      Ok(out)
+    }
+    _ => Err(field + " 必须是字符串数组")
+  }
+}
+
+///|
+/// 解析验收门规格（schema v1.1  fail-closed  PLAN-gates.md §一 验收用例5）
+///
+/// 未知字段 / 类型错一律报 schema 错；无该字段 → None（v1.0 行为不变）。
+fn parse_acceptance(v : Json?) -> Result[AcceptanceSpec?, String] {
+  match v {
+    Some(Object(m)) => {
+      // fail-closed：只允许已知字段
+      for key in m.keys() {
+        let known = key == "expect_exit" || key == "stdout_contains" || key == "stdout_not_contains" || key == "stderr_not_contains" || key == "artifact_glob"
+        if !known {
+          return Err("acceptance 含未知字段: " + key)
+        }
+      }
+      let mut expect_exit = 0
+      match m.get("expect_exit") {
+        Some(Number(n, ..)) => expect_exit = n.to_int()
+        Some(_) => return Err("acceptance.expect_exit 必须是整数")
+        None => ()
+      }
+      let stdout_contains = match m.get("stdout_contains") {
+        Some(arr) => match parse_str_array(arr, "acceptance.stdout_contains") {
+          Ok(a) => a
+          Err(e) => return Err(e)
+        }
+        None => []
+      }
+      let stdout_not_contains = match m.get("stdout_not_contains") {
+        Some(arr) => match parse_str_array(arr, "acceptance.stdout_not_contains") {
+          Ok(a) => a
+          Err(e) => return Err(e)
+        }
+        None => []
+      }
+      let stderr_not_contains = match m.get("stderr_not_contains") {
+        Some(arr) => match parse_str_array(arr, "acceptance.stderr_not_contains") {
+          Ok(a) => a
+          Err(e) => return Err(e)
+        }
+        None => []
+      }
+      let artifact_glob = match m.get("artifact_glob") {
+        Some(String(s)) => Some(s)
+        Some(_) => return Err("acceptance.artifact_glob 必须是字符串")
+        None => None
+      }
+      Ok(
+        Some(
+          {
+            expect_exit,
+            stdout_contains,
+            stdout_not_contains,
+            stderr_not_contains,
+            artifact_glob,
+          },
+        ),
+      )
+    }
+    _ => Ok(None)
+  }
+}
+
+///|
 /// 解析动作规格
 fn parse_action(v : Json) -> Result[ActionSpec, String] {
   match v {
@@ -116,7 +196,21 @@ fn parse_action(v : Json) -> Result[ActionSpec, String] {
         Some(c) => c
         None => "trash"
       }
-      Ok({ kind, argv, target, body, ttl, cleanup, })
+      let acceptance = match parse_acceptance(m.get("acceptance")) {
+        Ok(a) => a
+        Err(e) => return Err(e)
+      }
+      // 验收门只对 command 动作有语义（fail-closed）
+      if kind != "command" {
+        match acceptance {
+          Some(_) =>
+            return Err(
+              "acceptance 字段仅 command 动作可用（当前 kind=" + kind + "）",
+            )
+          None => ()
+        }
+      }
+      Ok({ kind, argv, target, body, ttl, cleanup, acceptance, })
     }
     _ => Err("动作必须是 JSON 对象")
   }

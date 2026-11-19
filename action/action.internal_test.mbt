@@ -91,3 +91,28 @@ async test "trash_file: returns Result without panic" {
     Err(_) => ()
   }
 }
+
+// ============================================================================
+// 生命周期事件 · product.invalid（schema v1.1 验收门，PLAN-gates.md §一）
+// ============================================================================
+
+///|
+/// product.invalid 字符串映射（to_string / from_string）
+test "LifecycleEventType: Invalid string mapping" {
+  assert_eq(@config.LifecycleEventType::Invalid.to_string(), "product.invalid")
+  assert_eq(
+    @config.LifecycleEventType::from_string("invalid"),
+    Some(@config.LifecycleEventType::Invalid),
+  )
+}
+
+///|
+/// product.invalid 事件构造与事件名
+test "LifecycleEvent: Invalid event_name" {
+  let event = @action.LifecycleEvent::new(
+    @config.LifecycleEventType::Invalid,
+    "/tmp/bad.json",
+  )
+  assert_eq(event.event_name(), "product.invalid")
+  assert_eq(event.path, "/tmp/bad.json")
+}

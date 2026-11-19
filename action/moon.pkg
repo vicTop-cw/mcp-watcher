@@ -1,6 +1,7 @@
 import {
   "mcp-watcher/config",
   "mcp-watcher/watch",
+  "mcp-watcher/util",
   "vicTop-cw/RX-MBT/rx",
   "vicTop-cw/RX-MBT/rhop_task" @rt,
   "vicTop-cw/RX-MBT/monitor" @mon,
@@ -9,16 +10,22 @@ import {
   "moonbitlang/core/ref",
   "moonbitlang/core/debug",
   "moonbitlang/core/async",
+  "moonbitlang/core/encoding/utf8" @utf8,
 }
 
 options(
-  // p3_persist_native_test.mbt 走 @mon.fs_write_atomic / fs_read_text，
-  // 依赖 native C FFI（js/wasm 无文件系统），门控为 native 专属。
+  // native 门控说明：
+  //   - p3_persist_native_test.mbt 走 @mon.fs_write_atomic / fs_read_text，
+  //     依赖 native C FFI（js/wasm 无文件系统）。
+  //   - acceptance_native_test.mbt 走真实 cmd 命令 + 真实目录枚举
+  //     （fs_list_stub.c 为 native 专属 C FFI）。
   targets: {
     "p3_persist_native_test.mbt": [ "native" ],
+    "acceptance_native_test.mbt": [ "native" ],
     "trash_native.mbt": [ "native" ],
     "trash_native_test.mbt": [ "native" ],
     "trash_stub.mbt": [ "js", "wasm" ],
   },
+  "native-stub": [ "fs_list_stub.c" ],
   "allow-experimental-packages": [ "moonbitlang/core/async" ],
 )

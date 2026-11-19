@@ -16,6 +16,7 @@ fn mk_rule(
     Some(["echo", "hi"]),
     None,
     None,
+    None,
   )
   @config.Rule::new(
     id,

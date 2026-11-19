@@ -403,3 +403,102 @@ test "rule_conflict_detection: exclude_conflict" {
     Err(_) => assert_true(false)
   }
 }
+
+// ============================================================================
+// config · 验收门（schema v1.1 · PLAN-gates.md §一）解析与 fail-closed
+// ============================================================================
+
+///|
+/// acceptance：全字段解析
+test "acceptance: full field parse" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"agent-cli\",\"--run\"],\"acceptance\":{\"expect_exit\":0,\"stdout_contains\":[\"DONE\"],\"stdout_not_contains\":[\"ERROR\",\"Traceback\"],\"stderr_not_contains\":[\"panic\"],\"artifact_glob\":\"output/*.json\"}}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(cfg) =>
+      match cfg.rules[0].actions[0].acceptance {
+        Some(acc) => {
+          assert_eq(acc.expect_exit, 0)
+          assert_eq(acc.stdout_contains, ["DONE"])
+          assert_eq(acc.stdout_not_contains, ["ERROR", "Traceback"])
+          assert_eq(acc.stderr_not_contains, ["panic"])
+          match acc.artifact_glob {
+            Some(g) => assert_eq(g, "output/*.json")
+            None => assert_true(false)
+          }
+        }
+        None => assert_true(false)
+      }
+    Err(e) => assert_true(false)
+  }
+}
+
+///|
+/// acceptance：空对象 = 全缺省（expect_exit=0、数组空、无 artifact_glob）
+test "acceptance: empty object defaults" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"],\"acceptance\":{}}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(cfg) =>
+      match cfg.rules[0].actions[0].acceptance {
+        Some(acc) => {
+          assert_eq(acc.expect_exit, 0)
+          assert_eq(acc.stdout_contains.length(), 0)
+          assert_eq(acc.stdout_not_contains.length(), 0)
+          assert_eq(acc.stderr_not_contains.length(), 0)
+          match acc.artifact_glob {
+            Some(_) => assert_true(false)
+            None => ()
+          }
+        }
+        None => assert_true(false)
+      }
+    Err(_) => assert_true(false)
+  }
+}
+
+///|
+/// 验收用例5：未知 acceptance 字段 → schema 错（fail-closed）
+test "acceptance: unknown field fails closed" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"],\"acceptance\":{\"bogus_field\":1}}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(_) => assert_true(false)
+    Err(e) => assert_true(e.contains("acceptance"))
+  }
+}
+
+///|
+/// acceptance：字段类型错 → schema 错（fail-closed）
+test "acceptance: wrong type fails closed" {
+  let json1 = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"],\"acceptance\":{\"expect_exit\":\"zero\"}}]}]}"
+  match @config.Config::from_json(json1) {
+    Ok(_) => assert_true(false)
+    Err(e) => assert_true(e.contains("acceptance"))
+  }
+  let json2 = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"],\"acceptance\":{\"stdout_contains\":\"DONE\"}}]}]}"
+  match @config.Config::from_json(json2) {
+    Ok(_) => assert_true(false)
+    Err(e) => assert_true(e.contains("acceptance"))
+  }
+}
+
+///|
+/// 非 command 动作携带 acceptance → 报错（该字段只对 command 有语义）
+test "acceptance: non-command action rejected" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"webhook\",\"target\":\"http://x\",\"acceptance\":{\"stdout_contains\":[\"x\"]}}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(_) => assert_true(false)
+    Err(e) => assert_true(e.contains("acceptance"))
+  }
+}
+
+///|
+/// 验收用例4：无 acceptance 字段 → 行为与 v1.0 完全一致（向后兼容锁）
+test "acceptance: absent field backward compatible" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(cfg) =>
+      match cfg.rules[0].actions[0].acceptance {
+        Some(_) => assert_true(false)
+        None => ()
+      }
+    Err(_) => assert_true(false)
+  }
+}
