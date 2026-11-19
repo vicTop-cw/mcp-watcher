@@ -1,4 +1,4 @@
-name = "mcp-watcher"
+name = "vicTop-cw/mcp-watcher"
 version = "0.2.0"
 
 import {

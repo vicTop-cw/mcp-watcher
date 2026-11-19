@@ -1,5 +1,5 @@
 import {
-  "mcp-watcher/config",
+  "vicTop-cw/mcp-watcher/config",
   "vicTop-cw/RX-MBT/monitor" @mon,
   "vicTop-cw/RX-MBT/rx",
   "moonbitlang/core/debug",

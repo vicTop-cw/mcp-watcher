@@ -1,8 +1,8 @@
 import {
-  "mcp-watcher/config",
-  "mcp-watcher/watch",
-  "mcp-watcher/rule",
-  "mcp-watcher/action",
+  "vicTop-cw/mcp-watcher/config",
+  "vicTop-cw/mcp-watcher/watch",
+  "vicTop-cw/mcp-watcher/rule",
+  "vicTop-cw/mcp-watcher/action",
   "vicTop-cw/RX-MBT/rx",
   "vicTop-cw/RX-MBT/rhop_task" @rt,
   "vicTop-cw/RX-MBT/monitor" @mon,
