@@ -44,6 +44,19 @@ mcp-watcher 不是一个"通用的文件监控触发器"。它是面向 AI 工�
 > 实测可做实，故由"规划中"升级为"native 已做实"；加密因底层依赖 node:crypto
 > 无法在 native 做实，维持诚实降级。两条路径均以实测为准，不把 no-op 包装成已实现。
 
+#### 双门禁（schema v1.1 · PLAN-gates.md）
+
+支柱 4 的强化：**动作准入（前）+ 产物有效性（后）**。全部纯函数判定、零新依赖、
+不引入重试循环；v1.0 规则（无这两个字段）行为逐位不变。
+
+| 门禁 | 位置 | 判定 | 失败处置 |
+|------|------|------|----------|
+| **guard**（守卫门） | 动作执行前 | 单命令必须 exit 0（argv 与 command 同走白名单校验，绝不走 shell） | `on_fail=skip`：记 `guard_fail` 事件跳过本次动作（规则存活）；`on_fail=stop`：记事件并停止本规则后续处理 |
+| **acceptance**（验收门） | 动作执行后 | `expect_exit` / `stdout_contains`(AND) / `stdout_not_contains` / `stderr_not_contains` / `artifact_glob`（相对 watch_dir 至少命中 1 文件） | `accepted=false`（保留真实 exit 与输出原文），触发 `product.invalid` 进入既有 TTL/trash 回收流，**不做自动重试**（重试留给上层） |
+
+红线：guard 不做组合逻辑（需要 AND/OR 的守卫用条件层组合），防止长成规则里
+套规则的策略引擎。字段契约见 `workbuddy/plan/config-schema.md` §5.1 / §5.2。
+
 ---
 
 ## 自治闭环

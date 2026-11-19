@@ -1,7 +1,12 @@
-# mcp-watcher 配置 Schema 权威定义（v1.0）
+# mcp-watcher 配置 Schema 权威定义（v1.1）
 
 > 配套 `design-spec.md`。本文件是 `.mcp-watch.json` 的**唯一权威契约**：字段、类型、约束、校验规则、示例。
 > 实现以本文件为准；`design-spec.md` 描述算法与模块，本文件描述数据结构本身。
+>
+> **v1.1 增量（2026-11-19，PLAN-gates.md 双门禁）**：
+> - `action` 可选字段 `acceptance`（验收门，堵「假绿」，§5.1）
+> - `rule` 可选字段 `guard`（守卫门，执行前环境准入，§5.2）
+> - 均为纯增量可选字段，schema v1.0 规则完全兼容（无该字段行为逐位不变）。
 
 ## 1. 顶层对象
 
@@ -31,6 +36,7 @@
 | `condition` | `Condition` | 否 | 恒真 | 见 §4；多个条件间为 AND |
 | `actions` | `array<Action>` | 是 | — | 非空；顺序执行 |
 | `stop_after` | `boolean` | 否 | `false` | EP-06 预留字段，v1.0 忽略 |
+| `guard` | `Guard` | 否 | 无（v1.0 行为不变） | v1.1 守卫门（执行前环境准入），见 §5.2 |
 
 ## 3. EventType（枚举）
 
@@ -64,6 +70,42 @@
 | `internal` | 内置动作 | `op: "reload_config"\|"pause_watch"\|"resume_watch"\|"log_event"`（必）、`message: string`（仅 `log_event` 用） |
 
 **校验规则**：`type` 必须为上表之一，或已在注册表注册（EP-01 自定义动作）；各 `type` 的必填字段缺失即报错；`on_error` 仅接受枚举值。
+
+### 5.1 Acceptance 对象（v1.1，验收门，仅 `command` 有效）
+
+| 字段 | 类型 | 默认 | 判定 |
+|------|------|------|------|
+| `expect_exit` | `integer` | `0` | exit_code == expect_exit |
+| `stdout_contains` | `array<string>` | `[]` | stdout 包含每一项（AND） |
+| `stdout_not_contains` | `array<string>` | `[]` | stdout 不含任何一项 |
+| `stderr_not_contains` | `array<string>` | `[]` | stderr 不含任何一项 |
+| `artifact_glob` | `string` | 无 | 相对 `watch_dir` 的 glob 至少命中 1 个文件 |
+
+**语义**：验收不过 ⇒ `accepted=false`（保留真实 exit_code 与输出原文），触发
+`product.invalid` 生命周期事件，进入既有 TTL/trash 回收流；**不做自动重试**
+（重试留给上层，如 fist-mbt saga）。无 `acceptance` 字段 ⇒ 行为与 v1.0 完全一致（向后兼容锁）。
+
+**校验规则（fail-closed）**：未知字段 / 类型错 / 非 `command` 动作携带 `acceptance` 一律 schema 错。
+
+### 5.2 Guard 对象（v1.1，守卫门，规则级执行前准入）
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `argv` | `array<string>` | 必，非空 | 守卫命令 argv（白名单校验同 `command` 动作；绝不走 shell 拼接） |
+| `on_fail` | `"skip"` \| `"stop"` | `"skip"` | 守卫不通过：`skip` = 记 `guard_fail` 事件并跳过本次动作（规则存活）；`stop` = 记事件并停止本规则后续处理（规则退场） |
+
+**语义**：guard 是一条**必须 exit 0** 的单命令（复用 `run_command` + ExecPolicy 白名单，
+argv 同样进白名单校验）；通过才执行 `actions`，不通过按 `on_fail` 处置。
+变量占位符沿用 §7（当前与 v1.0 `command` 动作一致：占位符展开未实现，argv 按字面量执行）。
+无 `guard` 字段 ⇒ 行为与 v1.0 完全一致（向后兼容锁）。
+
+**红线**：不做组合逻辑——需要 AND/OR 的守卫用条件层（§4）组合，guard 保持单命令，
+防止长成规则里套规则的策略引擎。
+
+**校验规则（fail-closed）**：未知字段 / 空 argv / 空字符串元素 / 非法 `on_fail` 一律 schema 错；
+guard 程序不在 `allowed_programs` → 加载期警告 + 运行期 ExecPolicy 拒绝（与 `command` 同策略）。
+
+**命名注**：JSON 键为 `guard`；MoonBit 侧结构体字段名为 `guard_spec`（`guard` 为 MoonBit 保留字）。
 
 ## 6. ExtensionDecl 对象（EP-07，v1.0 占位）
 

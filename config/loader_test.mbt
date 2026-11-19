@@ -502,3 +502,106 @@ test "acceptance: absent field backward compatible" {
     Err(_) => assert_true(false)
   }
 }
+
+// ============================================================================
+// config · 守卫门（schema v1.1 · PLAN-gates.md §二）解析与 fail-closed
+// ============================================================================
+
+///|
+/// guard：全字段解析
+test "guard: full field parse" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"guard\":{\"argv\":[\"test\",\"-z\",\"{{workdir}}/.agent.lock\"],\"on_fail\":\"skip\"},\"actions\":[{\"kind\":\"command\",\"argv\":[\"agent-cli\",\"--run\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(cfg) =>
+      match cfg.rules[0].guard_spec {
+        Some(g) => {
+          assert_eq(g.argv, ["test", "-z", "{{workdir}}/.agent.lock"])
+          assert_eq(g.on_fail, "skip")
+        }
+        None => assert_true(false)
+      }
+    Err(e) => assert_true(false)
+  }
+}
+
+///|
+/// guard：on_fail 缺省 → "skip"
+test "guard: on_fail defaults to skip" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"guard\":{\"argv\":[\"test\",\"-z\",\"x\"]},\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(cfg) =>
+      match cfg.rules[0].guard_spec {
+        Some(g) => assert_eq(g.on_fail, "skip")
+        None => assert_true(false)
+      }
+    Err(_) => assert_true(false)
+  }
+}
+
+///|
+/// guard：on_fail=stop 解析
+test "guard: on_fail stop parses" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"guard\":{\"argv\":[\"test\",\"-z\",\"x\"],\"on_fail\":\"stop\"},\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(cfg) =>
+      match cfg.rules[0].guard_spec {
+        Some(g) => assert_eq(g.on_fail, "stop")
+        None => assert_true(false)
+      }
+    Err(_) => assert_true(false)
+  }
+}
+
+///|
+/// guard：on_fail 非法值 → schema 错（fail-closed）
+test "guard: invalid on_fail fails closed" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"guard\":{\"argv\":[\"test\"],\"on_fail\":\"crash\"},\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(_) => assert_true(false)
+    Err(e) => assert_true(e.contains("guard"))
+  }
+}
+
+///|
+/// guard：未知字段 → schema 错（fail-closed）
+test "guard: unknown field fails closed" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"guard\":{\"argv\":[\"test\"],\"bogus\":1},\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(_) => assert_true(false)
+    Err(e) => assert_true(e.contains("guard"))
+  }
+}
+
+///|
+/// guard：空 argv → schema 错（fail-closed）
+test "guard: empty argv fails closed" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"guard\":{\"argv\":[]},\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(_) => assert_true(false)
+    Err(e) => assert_true(e.contains("guard"))
+  }
+}
+
+///|
+/// 守卫验收用例4：无 guard 字段 → v1.0 行为不变（向后兼容锁）
+test "guard: absent field backward compatible" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(cfg) =>
+      match cfg.rules[0].guard_spec {
+        Some(_) => assert_true(false)
+        None => ()
+      }
+    Err(_) => assert_true(false)
+  }
+}
+
+///|
+/// 守卫验收用例3（加载期侧）：guard 程序不在白名单 → 加载成功（警告级，不阻断）
+test "guard: program not in whitelist loads with warning" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"allowed_programs\":[],\"rules\":[{\"id\":\"rule-1\",\"events\":[\"create\"],\"patterns\":[\"**/*\"],\"guard\":{\"argv\":[\"agent-cli\",\"--probe\"],\"on_fail\":\"skip\"},\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"hi\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(cfg) => assert_eq(cfg.rules.length(), 1)
+    Err(_) => assert_true(false)
+  }
+}

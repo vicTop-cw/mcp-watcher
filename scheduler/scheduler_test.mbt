@@ -18,7 +18,7 @@ fn mk_rule(
     None,
     None,
   )
-  @config.Rule::new(id, events, ["*.tmp"], [], None, [action], once, priority)
+  @config.Rule::new(id, events, ["*.tmp"], [], None, [action], once, priority, None)
 }
 
 ///|
@@ -138,4 +138,32 @@ test "allowed_programs：空白名单 = 不执行任何命令（安全默认）"
     extensions: [],
   }
   assert_eq(@scheduler.allowed_programs(cfg).length(), 0)
+}
+
+// ============================================================================
+// scheduler · 守卫门 on_fail 决策（schema v1.1 · PLAN-gates.md §二）纯函数
+// ============================================================================
+
+///|
+/// guard_fail_decision：skip → 只跳过本次动作，规则不退场
+test "guard_fail_decision: skip keeps rule alive" {
+  let (skip_actions, retire) = @scheduler.guard_fail_decision("skip")
+  assert_true(skip_actions)
+  assert_false(retire)
+}
+
+///|
+/// guard_fail_decision：stop → 跳过动作并让规则退场
+test "guard_fail_decision: stop retires rule" {
+  let (skip_actions, retire) = @scheduler.guard_fail_decision("stop")
+  assert_true(skip_actions)
+  assert_true(retire)
+}
+
+///|
+/// guard_fail_decision：未知值 → 防御性按 skip 处理（解析层已 fail-closed，理论不达）
+test "guard_fail_decision: unknown value defensive" {
+  let (skip_actions, retire) = @scheduler.guard_fail_decision("crash")
+  assert_true(skip_actions)
+  assert_false(retire)
 }

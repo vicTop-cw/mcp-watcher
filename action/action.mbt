@@ -207,6 +207,60 @@ pub fn parse_exit_error(text : String) -> (Int32, String)? {
   }
 }
 
+// ============================================================================
+// 守卫门（schema v1.1 · PLAN-gates.md §二：执行前环境准入）
+// ============================================================================
+
+///|
+/// 守卫判定结果
+#derive(Eq, Debug)
+pub(all) struct GuardResult {
+  /// 守卫是否通过（必须 exit 0）
+  passed : Bool
+  /// 失败原因（通过时为空）
+  reason : String
+}
+
+///|
+pub extend GuardResult with Eq::{not_equal, equal}
+
+///|
+pub extend GuardResult with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+/// 构造守卫判定结果
+pub fn GuardResult::new(passed : Bool, reason : String) -> GuardResult {
+  { passed, reason, }
+}
+
+///|
+/// 执行守卫门（同步等待结果）
+///
+/// 复用 run_command + ExecPolicy 白名单（argv 同样进白名单校验，绝不走
+/// shell）；仅 exit 0 视为通过。变量占位符沿用 schema §7 机制（与 v1.0
+/// command 动作一致：占位符展开未实现，argv 按字面量执行）——守卫保持
+/// 单命令，不做组合逻辑（红线：防策略引擎）。
+pub fn run_guard(
+  guard_spec : @config.GuardSpec,
+  ev : @watch.FsEvent,
+  policy : @rt.ExecPolicy,
+) -> GuardResult {
+  let spec = @config.ActionSpec::new(
+    "command",
+    Some(guard_spec.argv),
+    None,
+    None,
+    None,
+  )
+  // 守卫无验收语义（它自己就是门禁）；watch_dir 占位不用
+  let outcome = run_command_action(spec, ev, policy, "")
+  if outcome.ok {
+    GuardResult::new(true, "")
+  } else {
+    GuardResult::new(false, outcome.stderr)
+  }
+}
+
 ///|
 /// 执行 command 动作（同步等待结果）
 ///

@@ -217,6 +217,54 @@ fn parse_action(v : Json) -> Result[ActionSpec, String] {
 }
 
 ///|
+/// 解析守卫门规格（schema v1.1  fail-closed  PLAN-gates.md §二）
+///
+/// 未知字段 / 空 argv / 非法 on_fail 一律报 schema 错；无该字段 → None
+/// （v1.0 行为不变）。
+fn parse_guard(v : Json?) -> Result[GuardSpec?, String] {
+  match v {
+    Some(Object(m)) => {
+      // fail-closed：只允许已知字段
+      for key in m.keys() {
+        if key != "argv" && key != "on_fail" {
+          return Err("guard 含未知字段: " + key)
+        }
+      }
+      let argv = match m.get("argv") {
+        Some(Array(items)) => {
+          let a : Array[String] = []
+          for it in items {
+            match it {
+              String(s) => {
+                if s == "" {
+                  return Err("guard.argv 元素不能为空")
+                }
+                a.push(s)
+              }
+              _ => return Err("guard.argv 必须是字符串数组")
+            }
+          }
+          a
+        }
+        _ => return Err("guard.argv 必须是非空字符串数组")
+      }
+      if argv.length() == 0 {
+        return Err("guard.argv 不能为空")
+      }
+      let on_fail = match jstr(m.get("on_fail")) {
+        Some(f) => f
+        None => "skip"
+      }
+      if on_fail != "skip" && on_fail != "stop" {
+        return Err("guard.on_fail 必须是 \"skip\" 或 \"stop\"")
+      }
+      Ok(Some({ argv, on_fail, }))
+    }
+    _ => Ok(None)
+  }
+}
+
+///|
 /// 解析单条规则
 fn parse_rule(v : Json) -> Result[Rule, String] {
   match v {
@@ -262,6 +310,10 @@ fn parse_rule(v : Json) -> Result[Rule, String] {
         Some(p) => p
         None => 0
       }
+      let guard_spec = match parse_guard(m.get("guard")) {
+        Ok(g) => g
+        Err(e) => return Err("规则 " + id + ": " + e)
+      }
       Ok({
         id,
         events,
@@ -271,6 +323,7 @@ fn parse_rule(v : Json) -> Result[Rule, String] {
         actions,
         stop_after,
         priority,
+        guard_spec,
       })
     }
     _ => Err("规则必须是 JSON 对象")
@@ -596,6 +649,22 @@ fn validate_config(cfg : Config) -> Result[Config, String] {
           _ => ()
         }
       }
+    }
+    // guard 程序同样进白名单校验（与 command 同策略，PLAN-gates.md §二 用例3）
+    match r.guard_spec {
+      Some(g) => {
+        let prog = g.argv[0]
+        if !cfg.allowed_programs.contains(prog) {
+          warns.push(
+            "⚠️ 安全: 规则 '" +
+            r.id +
+            "' 的 guard 程序 '" +
+            prog +
+            "' 不在 allowed_programs 白名单中，运行时将被 ExecPolicy 拒绝",
+          )
+        }
+      }
+      None => ()
     }
   }
   // 规则冲突检测（警告级别）

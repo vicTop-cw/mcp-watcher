@@ -94,97 +94,57 @@ pub fn attach_rules(
   let executed_rules = Ref::Ref([])
   for r in sorted_rules {
     let rule = r
-    // 检查是否已执行过（once 语义）
-    if rule.stop_after && executed_rules.val.contains(rule.id) {
+    // 检查是否已退场（once 语义 / guard on_fail=stop 退场）
+    if executed_rules.val.contains(rule.id) {
       continue
     }
     for ev_name in event_names_of(rule) {
       let _ = bus.subscribe(ev_name, fn(ev : @rx.TriggerEvent[@watch.FsEvent]) {
         let fe = ev.payload
-        // 检查是否已执行过（once 语义）
-        if rule.stop_after && executed_rules.val.contains(rule.id) {
+        // 检查是否已退场（once 语义 / guard on_fail=stop 退场）
+        if executed_rules.val.contains(rule.id) {
           return
         }
         let matched = @rule.dispatch([rule], fe)
         if matched.length() > 0 {
-          for a in rule.actions {
-            match @action.run_action(a, fe, policy, logging_config, watch_dir) {
-              Ok(o) => {
-                if o.accepted {
-                  log.val.push(
-                    "rule " +
-                    rule.id +
-                    " action " +
-                    a.kind +
-                    " ok exit=" +
-                    o.exit_code.to_string(),
-                  )
-                  // 真实执行记录：字段直接取自命中规则 / 事件 / 动作结果
-                  records.val.push(
-                    ExecRecord::new(
-                      rule.id,
-                      fe.event_type.to_string(),
-                      fe.path,
-                      a.kind,
-                      o.exit_code,
-                      o.stdout,
-                      o.stderr,
-                    ),
-                  )
-                } else {
-                  // 验收不过（schema v1.1）：保留真实 exit/stdout，
-                  // stderr 记录验收原因（命令已真实执行，exit_code 不是 -1）
-                  log.val.push(
-                    "rule " +
-                    rule.id +
-                    " action " +
-                    a.kind +
-                    " acceptance_failed exit=" +
-                    o.exit_code.to_string() +
-                    ": " +
-                    o.acceptance_reason,
-                  )
-                  let note = "acceptance failed: " +
-                    o.acceptance_reason +
-                    (if o.stderr == "" { "" } else { " | exec: " + o.stderr })
-                  records.val.push(
-                    ExecRecord::new(
-                      rule.id,
-                      fe.event_type.to_string(),
-                      fe.path,
-                      a.kind,
-                      o.exit_code,
-                      o.stdout,
-                      note,
-                    ),
-                  )
-                }
-              }
-              Err(e) => {
+          // 守卫门（schema v1.1）：执行前环境准入，通过才执行 actions
+          let proceed = match rule.guard_spec {
+            Some(g) => {
+              let gr = @action.run_guard(g, fe, policy)
+              if gr.passed {
+                true
+              } else {
+                // 守卫不过：记 guard_fail 事件（可观测 + 落结果记录），
+                // 按 on_fail 决策：skip 只跳过 / stop 再退场本规则
+                let (skip_actions, retire) = guard_fail_decision(g.on_fail)
                 log.val.push(
-                  "rule " + rule.id + " action " + a.kind + " err: " + e,
+                  "rule " + rule.id + " guard_fail: " + gr.reason,
                 )
-                // 失败也要落结果记录（安全事件可观测）：
-                // ExecPolicy 拒绝走 run_action 的 Err 分支，若不记录，
-                // 则 test-mode 的 stop-after 永不触发、拒绝事件无从对拍。
-                // exit_code=-1 表示"未真正执行"，stderr 携带可诊断原因。
                 records.val.push(
                   ExecRecord::new(
                     rule.id,
                     fe.event_type.to_string(),
                     fe.path,
-                    a.kind,
+                    "guard",
                     -1,
                     "",
-                    e,
+                    gr.reason,
                   ),
                 )
+                if retire {
+                  executed_rules.val.push(rule.id)
+                }
+                !skip_actions
               }
             }
+            None => true
           }
-          // 记录已执行（once 语义）
-          if rule.stop_after {
-            executed_rules.val.push(rule.id)
+          if proceed {
+            exec_actions(rule, fe, policy, logging_config, watch_dir, log, records)
+            // 记录已执行（once 语义）
+            if rule.stop_after {
+              executed_rules.val.push(rule.id)
+            }
           }
         }
       })
@@ -192,6 +152,112 @@ pub fn attach_rules(
     }
   }
   subscribed.val
+}
+
+///|
+/// 执行规则的动作组（schema v1.1 · 守卫门接线：仅在 guard 通过后调用）
+///
+/// 从 attach_rules 闭包内联代码抽出：逐动作走 run_action，结果落 log 与
+/// records（字段直接取自命中规则 / 事件 / 动作结果）。
+fn exec_actions(
+  rule : @config.Rule,
+  fe : @watch.FsEvent,
+  policy : @rt.ExecPolicy,
+  logging_config : @config.LoggingConfig,
+  watch_dir : String,
+  log : Ref[Array[String]],
+  records : Ref[Array[ExecRecord]],
+) -> Unit {
+  for a in rule.actions {
+    match @action.run_action(a, fe, policy, logging_config, watch_dir) {
+      Ok(o) => {
+        if o.accepted {
+          log.val.push(
+            "rule " +
+            rule.id +
+            " action " +
+            a.kind +
+            " ok exit=" +
+            o.exit_code.to_string(),
+          )
+          // 真实执行记录：字段直接取自命中规则 / 事件 / 动作结果
+          records.val.push(
+            ExecRecord::new(
+              rule.id,
+              fe.event_type.to_string(),
+              fe.path,
+              a.kind,
+              o.exit_code,
+              o.stdout,
+              o.stderr,
+            ),
+          )
+        } else {
+          // 验收不过（schema v1.1）：保留真实 exit/stdout，
+          // stderr 记录验收原因（命令已真实执行，exit_code 不是 -1）
+          log.val.push(
+            "rule " +
+            rule.id +
+            " action " +
+            a.kind +
+            " acceptance_failed exit=" +
+            o.exit_code.to_string() +
+            ": " +
+            o.acceptance_reason,
+          )
+          let note = "acceptance failed: " +
+            o.acceptance_reason +
+            (if o.stderr == "" { "" } else { " | exec: " + o.stderr })
+          records.val.push(
+            ExecRecord::new(
+              rule.id,
+              fe.event_type.to_string(),
+              fe.path,
+              a.kind,
+              o.exit_code,
+              o.stdout,
+              note,
+            ),
+          )
+        }
+      }
+      Err(e) => {
+        log.val.push(
+          "rule " + rule.id + " action " + a.kind + " err: " + e,
+        )
+        // 失败也要落结果记录（安全事件可观测）：
+        // ExecPolicy 拒绝走 run_action 的 Err 分支，若不记录，
+        // 则 test-mode 的 stop-after 永不触发、拒绝事件无从对拍。
+        // exit_code=-1 表示"未真正执行"，stderr 携带可诊断原因。
+        records.val.push(
+          ExecRecord::new(
+            rule.id,
+            fe.event_type.to_string(),
+            fe.path,
+            a.kind,
+            -1,
+            "",
+            e,
+          ),
+        )
+      }
+    }
+  }
+}
+
+///|
+/// 守卫门失败决策（schema v1.1 · PLAN-gates.md §二 纯函数）
+///
+/// 返回：(跳过本次动作, 规则退场)
+///   - "skip"：只跳过本次动作，规则存活（再次事件仍触发 guard 判定）
+///   - "stop"：跳过动作并让规则退场（停止本规则后续处理）
+///   - 未知值：防御性按 skip 处理（解析层已 fail-closed，理论不达）
+pub fn guard_fail_decision(on_fail : String) -> (Bool, Bool) {
+  if on_fail == "stop" {
+    (true, true)
+  } else {
+    (true, false)
+  }
 }
 
 ///|
@@ -283,6 +349,9 @@ pub fn allowed_programs(config : @config.Config) -> Array[String] {
 ///|
 /// 一次性执行（用于测试 / 离线模式）
 ///
+/// 守卫门语义与 attach_rules 一致：guard 不过记 guard_fail 并跳过动作
+/// （单趟离线语义下 stop/skip 收敛为"跳过本规则动作"）。
+///
 /// 参数：
 ///   rules  - 规则表
 ///   ev     - 触发事件
@@ -301,29 +370,48 @@ pub fn run_once(
   let matched = @rule.dispatch(rules, ev)
   let log : Array[String] = []
   for r in matched {
-    for a in r.actions {
-      match @action.run_action(a, ev, policy, logging_config, watch_dir) {
-        Ok(o) =>
-          if o.accepted {
-            log.push(
-              "rule " +
-              r.id +
-              " action " +
-              a.kind +
-              " ok exit=" +
-              o.exit_code.to_string(),
-            )
-          } else {
-            log.push(
-              "rule " +
-              r.id +
-              " action " +
-              a.kind +
-              " acceptance_failed: " +
-              o.acceptance_reason,
-            )
-          }
-        Err(e) => log.push("rule " + r.id + " action " + a.kind + " err: " + e)
+    // 守卫门（schema v1.1）：执行前环境准入，通过才执行 actions
+    let proceed = match r.guard_spec {
+      Some(g) => {
+        let gr = @action.run_guard(g, ev, policy)
+        if gr.passed {
+          true
+        } else {
+          // 守卫不过：记 guard_fail 并按 on_fail 决策跳过动作（run_once 单趟
+          // 离线语义下 stop/skip 收敛为"跳过本规则动作"，退场无从体现）
+          let (skip_actions, _retire) = guard_fail_decision(g.on_fail)
+          log.push("rule " + r.id + " guard_fail: " + gr.reason)
+          !skip_actions
+        }
+      }
+      None => true
+    }
+    if proceed {
+      for a in r.actions {
+        match @action.run_action(a, ev, policy, logging_config, watch_dir) {
+          Ok(o) =>
+            if o.accepted {
+              log.push(
+                "rule " +
+                r.id +
+                " action " +
+                a.kind +
+                " ok exit=" +
+                o.exit_code.to_string(),
+              )
+            } else {
+              log.push(
+                "rule " +
+                r.id +
+                " action " +
+                a.kind +
+                " acceptance_failed: " +
+                o.acceptance_reason,
+              )
+            }
+          Err(e) =>
+            log.push("rule " + r.id + " action " + a.kind + " err: " + e)
+        }
       }
     }
   }

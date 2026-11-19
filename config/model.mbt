@@ -202,6 +202,36 @@ pub fn ActionSpec::new(
 }
 
 ///|
+/// 守卫门规格（schema v1.1  Rule 可选字段  PLAN-gates.md §二）
+///
+/// guard 是一条**必须 exit 0** 的单命令（复用 run_command + ExecPolicy 白名单，
+/// argv 同样进白名单校验，不走 shell）。通过才执行 actions；不通过按 on_fail：
+///   - "skip"（缺省）：记 guard_fail 事件并跳过本次动作，规则存活
+///   - "stop"：记 guard_fail 事件并停止本规则后续处理（规则退场）
+///
+/// **不做组合逻辑**：需要 AND/OR 的守卫用条件层组合，guard 保持单命令——
+/// 防止长成规则里套规则的策略引擎（红线）。
+#derive(Eq, Debug)
+pub(all) struct GuardSpec {
+  /// guard 命令 argv（白名单校验同 command 动作；绝不 shell 拼接）
+  argv : Array[String]
+  /// 失败处理："skip"（缺省）/ "stop"
+  on_fail : String
+}
+
+///|
+pub extend GuardSpec with Eq::{not_equal, equal}
+
+///|
+pub extend GuardSpec with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+/// 构造守卫门规格
+pub fn GuardSpec::new(argv : Array[String], on_fail : String) -> GuardSpec {
+  { argv, on_fail, }
+}
+
+///|
 /// 单条规则
 #derive(Eq, Debug)
 pub(all) struct Rule {
@@ -227,6 +257,9 @@ pub(all) struct Rule {
   ///   - -50-(-1) : Low（低优先级规则）
   ///   - -100- : Debug（调试规则）
   priority : Int32
+  /// 守卫门（schema v1.1，执行前环境准入；None = v1.0 行为不变）
+  /// 注：JSON 键为 "guard"；本字段名用 guard_spec（guard 为 MoonBit 保留字）
+  guard_spec : GuardSpec?
 }
 
 ///|
@@ -303,8 +336,19 @@ pub fn Rule::new(
   actions : Array[ActionSpec],
   stop_after : Bool,
   priority : Int32,
+  guard_spec : GuardSpec?,
 ) -> Rule {
-  { id, events, patterns, exclude, condition, actions, stop_after, priority, }
+  {
+    id,
+    events,
+    patterns,
+    exclude,
+    condition,
+    actions,
+    stop_after,
+    priority,
+    guard_spec,
+  }
 }
 
 ///|
