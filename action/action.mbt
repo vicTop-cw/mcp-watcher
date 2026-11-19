@@ -4,10 +4,11 @@
 // 这是"产物生命周期语义"支柱的执行侧骨架：动作是有语义的（command / mcp_tool_call
 // / webhook / internal），而非裸 shell。
 //
-// P0 实现期：
-//   - `command` 分支接入 rx `run_command` + `ExecPolicy`（白名单、argv 不走 shell）；
-//   - `mcp_tool_call` / `webhook` / `internal` 保留为待实现的扩展位，
-//     返回**可诊断错误**而非静默成功。
+// EP-01 实现状态：
+//   - `command` (v1.0)：rx `run_command` + `ExecPolicy`（白名单、argv 不走 shell）；
+//   - `internal` (EP-01a)：内部动作注册表直连（见 scheduler.mbt）；
+//   - `webhook` (EP-01b)：见 webhook.mbt（js 真实 HTTP；非 js 诚实降级）；
+//   - `mcp_tool_call` (EP-01c)：见 mcp_stdio.mbt（v1.0 仅 stdio；非 js 诚实降级）。
 //
 // ⚠️ 安全模型（rx 侧设计，本项目沿用）：
 //   `ExecPolicy::default()` 只放行 `action:*` / `handler:*`，
@@ -1045,10 +1046,14 @@ pub fn run_action(
         _ => if outcome.ok { Ok(outcome) } else { Err(outcome.stderr) }
       }
     }
-    "mcp_tool_call" =>
-      Err(
-        "action mcp_tool_call 待实现（EP-01 动作扩展）：需要 MCP 客户端接入",
-      )
+    "mcp_tool_call" => {
+      let outcome = run_mcp_action(spec, ev, policy, watch_dir, watch_id)
+      if outcome.ok {
+        Ok(outcome)
+      } else {
+        Err(outcome.stderr)
+      }
+    }
     "webhook" => {
       let outcome = run_webhook_action(spec, ev, watch_dir, watch_id)
       if outcome.ok {

@@ -358,6 +358,22 @@ fn parse_action(v : Json) -> Result[ActionSpec, String] {
       } else {
         None
       }
+      // server_args：server 命令行参数（EP-01c）；mcp 专属字段（fail-closed，同 op/message 策略）
+      let server_args : Array[String]? =
+        match (kind, m.get("server_args")) {
+          ("mcp_tool_call", Some(v)) =>
+            match parse_str_array(v, "mcp_tool_call.server_args") {
+              Ok(a) => Some(a)
+              Err(e) => return Err(e)
+            }
+          ("mcp_tool_call", None) => Some([])
+          (_, Some(_)) =>
+            return Err(
+              "server_args 字段仅 mcp_tool_call 动作可用（当前 kind=" +
+              kind + "）",
+            )
+          (_, None) => None
+        }
       let transport_raw = if kind == "mcp_tool_call" {
         jstr(m.get("transport"))
       } else {
@@ -431,6 +447,7 @@ fn parse_action(v : Json) -> Result[ActionSpec, String] {
         timeout_ms,
         server,
         mcp_args_json,
+        server_args,
         transport: transport_final,
       })
     }
@@ -868,6 +885,22 @@ fn validate_config(cfg : Config) -> Result[Config, String] {
               )
             }
           }
+          _ => ()
+        }
+      }
+      // mcp server 程序同样进白名单校验（与 command/guard 同策略，EP-01c）
+      if a.kind == "mcp_tool_call" {
+        match a.server {
+          Some(prog) if prog != "" =>
+            if !cfg.allowed_programs.contains(prog) {
+              warns.push(
+                "⚠️ 安全: 规则 '" +
+                r.id +
+                "' 的 mcp server 程序 '" +
+                prog +
+                "' 不在 allowed_programs 白名单中，运行时将被拒绝",
+              )
+            }
           _ => ()
         }
       }

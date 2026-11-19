@@ -30,6 +30,9 @@ options(
     // EP-01b webhook：js 目标真实 HTTP e2e / native 目标诚实降级
     "webhook_js_test.mbt": [ "js" ],
     "webhook_native_test.mbt": [ "native" ],
+    // EP-01c mcp_tool_call：js 目标 stdio 真实 e2e（本地 mock server）/ native 诚实降级
+    "mcp_stdio_js_test.mbt": [ "js" ],
+    "mcp_native_test.mbt": [ "native" ],
   },
   "native-stub": [ "fs_list_stub.c" ],
   "allow-experimental-packages": [ "moonbitlang/core/async" ],

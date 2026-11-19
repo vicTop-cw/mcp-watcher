@@ -202,6 +202,8 @@ pub(all) struct ActionSpec {
   server : String?
   /// mcp_tool_call: 工具调用 args（原始 JSON object 文本；运行时按 §7 占位符展开）
   mcp_args_json : String?
+  /// mcp_tool_call: server 命令行参数（EP-01c；spawn argv = [server] + server_args，不走 shell）
+  server_args : Array[String]?
   /// mcp_tool_call: transport stdio / sse / http（缺省 stdio）
   transport : String?
 }
@@ -225,7 +227,7 @@ pub fn ActionSpec::new(
     kind, argv, target, body, ttl: 0, cleanup: "trash",
     acceptance, op: None, message: None,
     url: None, http_method: None, headers_json: None, timeout_ms: 5000,
-    server: None, mcp_args_json: None, transport: None,
+    server: None, mcp_args_json: None, server_args: None, transport: None,
   }
 }
 
@@ -254,6 +256,7 @@ pub fn ActionSpec::new_webhook(
     timeout_ms,
     server: None,
     mcp_args_json: None,
+    server_args: None,
     transport: None,
   }
 }
@@ -264,7 +267,7 @@ pub fn ActionSpec::new_mcp(
   server : String,
   tool : String,
   mcp_args_json : String?,
-  transport : String?,
+  server_args : Array[String]?,
   timeout_ms : Int32,
 ) -> ActionSpec {
   {
@@ -283,7 +286,8 @@ pub fn ActionSpec::new_mcp(
     timeout_ms,
     server: Some(server),
     mcp_args_json,
-    transport,
+    server_args,
+    transport: Some("stdio"),
   }
 }
 
@@ -306,6 +310,7 @@ pub fn ActionSpec::new_internal(op : String, message : String?) -> ActionSpec {
     timeout_ms: 5000,
     server: None,
     mcp_args_json: None,
+    server_args: None,
     transport: None,
   }
 }
