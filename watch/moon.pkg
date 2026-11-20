@@ -7,5 +7,9 @@ import {
 }
 
 options(
+  targets: {
+    // EP-03：递归 js 监控源（extern "js" 仅 js 目标可编译）
+    "watcher_js_rec.mbt": [ "js" ],
+  },
   "allow-experimental-packages": [ "moonbitlang/core/async" ],
 )

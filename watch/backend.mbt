@@ -202,13 +202,19 @@ fn rx_watch_source(
 
 ///|
 /// js：rx 的 js 监控源（node fs.watch）
+/// EP-03 修复：rx 的 js watch_folder 只挂单层（FFI 无 recursive），js daemon
+/// 传 recursive=true 时改走本仓递归实现（watcher_js_rec.mbt），子目录事件
+/// 不再丢失。
 #cfg(target="js")
 fn rx_watch_source(
   path : String,
   recursive : Bool,
 ) -> @rx.Observable[@mon.WatchEvent, @mon.WatchError] {
-  let _ = recursive
-  @mon.watch_folder(path)
+  if recursive {
+    watch_folder_recursive(path)
+  } else {
+    @mon.watch_folder(path)
+  }
 }
 
 ///|
