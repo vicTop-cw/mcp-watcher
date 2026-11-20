@@ -66,8 +66,21 @@ pub fn CliArgs::new() -> CliArgs {
 /// 解析命令行参数
 pub fn parse_args(argv : Array[String]) -> CliArgs {
   let out = CliArgs::new()
-  // ⚠️ @env.args() 的 args[0] 是**可执行文件路径**，子命令从 args[1] 起
-  let cmd = if argv.length() > 1 { argv[1] } else { "help" }
+  // ⚠️ @env.args() 的布局随目标不同：native 的 args[0] 是**可执行文件路径**，
+  // 子命令在 args[1]；js 的 args 是完整 process.argv（[node, 脚本, 子命令, ...]），
+  // 子命令在 args[2]。兼容三种布局：扫描「首个已知子命令」，其后全部按旗标解析。
+  let known : Array[String] = [
+    "validate", "run", "status", "stop", "start", "reload", "help",
+  ]
+  let start = Ref::Ref(-1)
+  let mut cmd = "help"
+  for i0 in 0..<argv.length() {
+    if known.contains(argv[i0]) {
+      start.val = i0
+      cmd = argv[i0]
+      break
+    }
+  }
   let command = cmd
   let mut rules = out.rules
   let mut watch_dir = out.watch_dir
@@ -76,7 +89,7 @@ pub fn parse_args(argv : Array[String]) -> CliArgs {
   let mut stop_after = out.stop_after
   let mut debounce_ms = out.debounce_ms
   let mut once = false
-  let i = Ref::Ref(2)
+  let i = Ref::Ref(start.val + 1)
   while i.val < argv.length() {
     let a = argv[i.val]
     if a == "--rules" && i.val + 1 < argv.length() {
