@@ -14,6 +14,10 @@
 // ============================================================================
 
 ///|
+/// 日志缓冲区默认容量（条目数；达到后触发轮转，避免内存无限增长）
+const LOGGER_BUFFER_CAPACITY : Int32 = 1000
+
+///|
 /// 日志级别
 #derive(Eq, Debug)
 pub(all) enum LogLevel {
@@ -136,7 +140,7 @@ pub(all) struct Logger {
   config : @config.LoggingConfig
   /// 内存日志缓冲区
   buffer : Array[RuleTriggerLog]
-  /// 缓冲区最大条目数（默认 1000，达到后触发轮转）
+  /// 缓冲区最大条目数（默认 LOGGER_BUFFER_CAPACITY，达到后触发轮转）
   max_buffer_size : Int32
 }
 
@@ -144,7 +148,7 @@ pub(all) struct Logger {
 
 /// 构造日志记录器
 pub fn Logger::new(config : @config.LoggingConfig) -> Logger {
-  { config, buffer: [], max_buffer_size: 1000, }
+  { config, buffer: [], max_buffer_size: LOGGER_BUFFER_CAPACITY, }
 }
 
 ///|

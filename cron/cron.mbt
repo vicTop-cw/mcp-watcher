@@ -6,6 +6,14 @@
 // ============================================================================
 
 ///|
+/// cron 搜索步长 / 年限等魔法数字收敛
+/// 步长 60000ms = 1 分钟（cron 最小精度）；搜索上限 4 年（366 天闰年上限分钟数）。
+const CRON_STEP_MS : Int64 = 60000L
+const CRON_YEAR_LIMIT = 4
+const CRON_ITER_LIMIT : Int = CRON_YEAR_LIMIT * 366 * 24 * 60
+const CRON_NO_MATCH_MSG = " 年内无匹配 cron: "
+
+///|
 /// 时间戳（分钟精度）
 #derive(Eq, Debug)
 pub(all) struct Timestamp {
@@ -269,18 +277,18 @@ pub fn CronExpr::next_after(
   self : CronExpr,
   from : Timestamp,
 ) -> Result[Timestamp, String] {
-  let mut ms : Int64 = cron_to_ms(from) + 60000L
+  let mut ms : Int64 = cron_to_ms(from) + CRON_STEP_MS
   let mut iter_count = 0
-  let limit = 4 * 366 * 24 * 60
+  let limit = CRON_ITER_LIMIT
   while iter_count < limit {
     let t = ms_to_cron(ms)
     if cron_matches(self, t) {
       return Ok(t)
     }
-    ms = ms + 60000L
+    ms = ms + CRON_STEP_MS
     iter_count = iter_count + 1
   }
-  Err("4 年内无匹配 cron: " + cron_to_string(self))
+  Err(CRON_YEAR_LIMIT.to_string() + CRON_NO_MATCH_MSG + cron_to_string(self))
 }
 
 ///|

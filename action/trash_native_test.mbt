@@ -5,7 +5,7 @@
 
 ///|
 async test "trash_file native：文件被真实移入 .trash 目录" {
-  let base = "E:/IDEProjects/AI/mcp-watcher/action/.trash-test"
+  let base = "action/.trash-test"
   let _ = @fs.mkdir(base, recursive=true, allow_exist=true)
   defer (@fs.rmdir(base, recursive=true, allow_missing=true) catch { _ => () })
   let src = base + "/victim.tmp"
@@ -21,5 +21,5 @@ async test "trash_file native：文件被真实移入 .trash 目录" {
   // 原路径消失
   assert_false(@fs.exists(src))
   // .trash 目录存在
-  assert_true(@fs.exists(base + "/.trash"))
+  assert_true(@fs.exists(base + "/" + TRASH_DIR_NAME))
 }

@@ -5,6 +5,52 @@
 // 解析采用手动提取（与 rx-mbt 一致），不使用 @json derive，规避派生不确定性。
 // ============================================================================
 
+// ----------------------------------------------------------------------------
+// 共享默认值常量（硬编码收敛 · 2026-11-20 排查修复）
+// DSL 缺省语义见 config-schema.md；值保持向后兼容，只收敛字面量。
+// ----------------------------------------------------------------------------
+
+///|
+/// ActionSpec.ttl 缺省（秒；0 = 永久不过期）
+pub const DEFAULT_TTL_SECONDS = 0
+
+///|
+/// ActionSpec.cleanup 缺省（产物回收模式：trash / none）
+pub const DEFAULT_CLEANUP_MODE = "trash"
+
+///|
+/// webhook / mcp_tool_call / internal 动作超时缺省（毫秒）
+pub const DEFAULT_ACTION_TIMEOUT_MS = 5000
+
+///|
+/// mcp_tool_call.transport 缺省
+pub const DEFAULT_MCP_TRANSPORT = "stdio"
+
+///|
+/// guard.on_fail 缺省（守卫不过时的处理：skip / stop）
+pub const DEFAULT_GUARD_ON_FAIL = "skip"
+
+///|
+/// acceptance.expect_exit 缺省（期望退出码）
+pub const DEFAULT_EXPECT_EXIT = 0
+
+///|
+/// LoggingConfig.log_file 缺省
+pub const DEFAULT_LOG_FILE = "mcp-watcher.log"
+
+///|
+/// 优先级分档阈值（有业务语义，见 PriorityLevel 注释）
+const PRIORITY_CRITICAL_MIN = 100
+const PRIORITY_HIGH_MIN = 50
+const PRIORITY_MEDIUM_MIN = 0
+const PRIORITY_LOW_MIN = -50
+
+///|
+/// Config 顶层默认值（Config::default / 规则文件缺省字段）
+const DEFAULT_SCHEMA_VERSION = 1
+const DEFAULT_RECURSIVE = true
+const DEFAULT_DEBOUNCE_MS = 0
+
 ///|
 /// 事件类型（与 watch 层 FsEvent.event_type 对应）
 #derive(Eq, Debug)
@@ -224,9 +270,9 @@ pub fn ActionSpec::new(
   acceptance : AcceptanceSpec?,
 ) -> ActionSpec {
   {
-    kind, argv, target, body, ttl: 0, cleanup: "trash",
+    kind, argv, target, body, ttl: DEFAULT_TTL_SECONDS, cleanup: DEFAULT_CLEANUP_MODE,
     acceptance, op: None, message: None,
-    url: None, http_method: None, headers_json: None, timeout_ms: 5000,
+    url: None, http_method: None, headers_json: None, timeout_ms: DEFAULT_ACTION_TIMEOUT_MS,
     server: None, mcp_args_json: None, server_args: None, transport: None,
   }
 }
@@ -245,8 +291,8 @@ pub fn ActionSpec::new_webhook(
     argv: None,
     target: None,
     body,
-    ttl: 0,
-    cleanup: "trash",
+    ttl: DEFAULT_TTL_SECONDS,
+    cleanup: DEFAULT_CLEANUP_MODE,
     acceptance: None,
     op: None,
     message: None,
@@ -275,8 +321,8 @@ pub fn ActionSpec::new_mcp(
     argv: None,
     target: Some(tool),
     body: None,
-    ttl: 0,
-    cleanup: "trash",
+    ttl: DEFAULT_TTL_SECONDS,
+    cleanup: DEFAULT_CLEANUP_MODE,
     acceptance: None,
     op: None,
     message: None,
@@ -287,7 +333,7 @@ pub fn ActionSpec::new_mcp(
     server: Some(server),
     mcp_args_json,
     server_args,
-    transport: Some("stdio"),
+    transport: Some(DEFAULT_MCP_TRANSPORT),
   }
 }
 
@@ -299,15 +345,15 @@ pub fn ActionSpec::new_internal(op : String, message : String?) -> ActionSpec {
     argv: None,
     target: None,
     body: None,
-    ttl: 0,
-    cleanup: "trash",
+    ttl: DEFAULT_TTL_SECONDS,
+    cleanup: DEFAULT_CLEANUP_MODE,
     acceptance: None,
     op: Some(op),
     message,
     url: None,
     http_method: None,
     headers_json: None,
-    timeout_ms: 5000,
+    timeout_ms: DEFAULT_ACTION_TIMEOUT_MS,
     server: None,
     mcp_args_json: None,
     server_args: None,
@@ -396,13 +442,13 @@ pub extend PriorityLevel with @moonbitlang/core/debug.Debug::{to_repr}
 ///|
 /// 根据优先级值获取优先级级别
 pub fn PriorityLevel::from_priority(priority : Int32) -> PriorityLevel {
-  if priority >= 100 {
+  if priority >= PRIORITY_CRITICAL_MIN {
     Critical
-  } else if priority >= 50 {
+  } else if priority >= PRIORITY_HIGH_MIN {
     High
-  } else if priority >= 0 {
+  } else if priority >= PRIORITY_MEDIUM_MIN {
     Medium
-  } else if priority >= -50 {
+  } else if priority >= PRIORITY_LOW_MIN {
     Low
   } else {
     Debug
@@ -486,7 +532,7 @@ pub extend LoggingConfig with @moonbitlang/core/debug.Debug::{to_repr}
 ///|
 /// 构造日志配置（默认启用，日志文件名为 mcp-watcher.log）
 pub fn LoggingConfig::new() -> LoggingConfig {
-  { enabled: true, log_dir: "", log_file: "mcp-watcher.log", }
+  { enabled: true, log_dir: "", log_file: DEFAULT_LOG_FILE, }
 }
 
 ///|

@@ -52,12 +52,12 @@ pub extend CliArgs with @moonbitlang/core/debug.Debug::{to_repr}
 pub fn CliArgs::new() -> CliArgs {
   {
     command: "help",
-    rules: ".mcp-watch.json",
+    rules: DEFAULT_RULES_FILE,
     watch_dir: "",
     results: "",
     ready: "",
-    stop_after: -1L,
-    debounce_ms: -1L,
+    stop_after: NO_OVERRIDE,
+    debounce_ms: NO_OVERRIDE,
     once: false,
   }
 }
@@ -105,10 +105,10 @@ pub fn parse_args(argv : Array[String]) -> CliArgs {
       ready = argv[i.val + 1]
       i.val = i.val + 2
     } else if a == "--stop-after" && i.val + 1 < argv.length() {
-      stop_after = @string.parse_int64(argv[i.val + 1]) catch { _ => -1L }
+      stop_after = @string.parse_int64(argv[i.val + 1]) catch { _ => NO_OVERRIDE }
       i.val = i.val + 2
     } else if a == "--debounce-ms" && i.val + 1 < argv.length() {
-      debounce_ms = @string.parse_int64(argv[i.val + 1]) catch { _ => -1L }
+      debounce_ms = @string.parse_int64(argv[i.val + 1]) catch { _ => NO_OVERRIDE }
       i.val = i.val + 2
     } else if a == "--once" {
       once = true
@@ -126,6 +126,31 @@ const EXIT_SUCCESS = 0
 
 ///|
 const EXIT_FAILURE = 1
+
+// ============================================================================
+// 命名常量（硬编码收敛 · 2026-11-20 排查修复）
+// ============================================================================
+
+///|
+/// 默认规则文件名（CliArgs 缺省值，与 config-schema.md 对齐）
+const DEFAULT_RULES_FILE = ".mcp-watch.json"
+
+///|
+/// 默认 pidfile 文件名（pidfile_path 缺省值）
+const DEFAULT_PIDFILE_NAME = ".mcp-watch.pid"
+
+///|
+/// 热重载防抖保底窗口（毫秒；debounce_ms <= 0 时使用，
+/// 编辑器保存突发合并窗口）
+const RELOAD_WINDOW_MIN_MS : Int64 = 300L
+
+///|
+/// 真实时钟驱动间隔（毫秒；rx 时间算子依赖真实时钟被周期驱动）
+const CLOCK_DRIVE_INTERVAL_MS : Int64 = 100L
+
+///|
+/// 命令行「未覆盖」哨兵（-1 = 使用配置值 / 缺省值，而非 0）
+const NO_OVERRIDE : Int64 = -1L
 
 ///|
 /// 终止当前进程（native：C exit，保证 stop-after 后守护进程真正退出）
@@ -150,9 +175,9 @@ fn exit_process(code : Int32) -> Unit {
 /// 守护进程 pidfile 路径（相对于 watch_dir）
 pub fn pidfile_path(watch_dir : String) -> String {
   if watch_dir == "" {
-    ".mcp-watch.pid"
+    DEFAULT_PIDFILE_NAME
   } else {
-    watch_dir + "/.mcp-watch.pid"
+    watch_dir + "/" + DEFAULT_PIDFILE_NAME
   }
 }
 
@@ -252,7 +277,7 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
   let reload_window = if cfg.debounce_ms > 0 {
     cfg.debounce_ms.to_int64()
   } else {
-    300L
+    RELOAD_WINDOW_MIN_MS
   }
   let nrl = @scheduler.attach_rules_file_reload(
     bus, state, reg, reload_window, log,
@@ -303,7 +328,7 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
     // 时钟安装**并被驱动**后才按真实时间运行；缺驱动则 watch 防抖永不
     // 触发（潜在缺陷顺带修复）
     let _ = group.spawn(fn() {
-      @rx.drive_real_clock(100)
+      @rx.drive_real_clock(CLOCK_DRIVE_INTERVAL_MS)
     })
     // 规则文件可能在 watch_dir 之外：目录未被主监控覆盖时补一个监控
     // （仅顶层；事件进同一 bus，由路径匹配过滤）
@@ -449,7 +474,9 @@ async fn main {
 
 ///|
 fn cmd_help() -> Unit {
-  println("mcp-watcher · AI 工作区自治运行时 (v0.1.0)")
+  println(
+    "mcp-watcher · AI 工作区自治运行时 (v" + @util.APP_VERSION + ")",
+  )
   println("========================================================")
   println("四大支柱：")
   println(

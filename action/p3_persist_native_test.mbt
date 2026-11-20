@@ -22,7 +22,7 @@ test "save/load 往返：追踪表持久化后恢复" {
   let tracker : @action.ProductTracker = {
     records: [mk_rec("persist.tmp", 10L, 3600)],
   }
-  let path = "E:/IDEProjects/AI/mcp-watcher/tests/harness/.p3-tracker-test.jsonl"
+  let path = "tests/harness/.p3-tracker-test.jsonl"
   match tracker.save(path) {
     Err(_) => assert_true(false)
     Ok(_) => ()

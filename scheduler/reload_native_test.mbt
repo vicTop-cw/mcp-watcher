@@ -29,7 +29,7 @@ fn ep01d_ev(tmp : String) -> @watch.FsEvent {
 ///|
 test "验收: 规则文件 1→2 规则 → internal 通道 reload → 规则表热切换" {
   @rx.install_real_clock()
-  let tmp = "E:/IDEProjects/AI/mcp-watcher/tests/harness/.ep01d-reload.json"
+  let tmp = "tests/harness/.ep01d-reload.json"
   let r1 =
     "{\"id\":\"r1\",\"events\":[\"create\"],\"patterns\":[\"*.tmp\"]," +
     "\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"a\"]}]}"
@@ -79,7 +79,7 @@ test "验收: 规则文件 1→2 规则 → internal 通道 reload → 规则表
 ///|
 test "op: 带 rules_ref 的 reload_config → 回执消息含「热切换」标注" {
   @rx.install_real_clock()
-  let tmp = "E:/IDEProjects/AI/mcp-watcher/tests/harness/.ep01d-opmsg.json"
+  let tmp = "tests/harness/.ep01d-opmsg.json"
   let r1 =
     "{\"id\":\"r1\",\"events\":[\"create\"],\"patterns\":[\"*.tmp\"]," +
     "\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"a\"]}]}"

@@ -37,7 +37,9 @@ pub fn mcp_call_request(
 ) -> (Int32, String)? {
   let default_init =
     "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{}," +
-    "\"clientInfo\":{\"name\":\"mcp-watcher\",\"version\":\"0.1.0\"}}"
+    "\"clientInfo\":{\"name\":\"mcp-watcher\",\"version\":\"" +
+    @util.APP_VERSION +
+    "\"}}"
   let params = match (method_name, params_json) {
     ("initialize", None) => default_init
     (_, Some(p)) => p
@@ -270,7 +272,7 @@ pub fn run_mcp_action(
   let timeout_ms = if spec.timeout_ms > 0 {
     spec.timeout_ms
   } else {
-    5000
+    @config.DEFAULT_ACTION_TIMEOUT_MS
   }
   let argv_json = @json.Json::stringify(
     @json.Json::array(argv.map(fn(a) { @json.Json::string(a) })),

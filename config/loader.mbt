@@ -3,6 +3,11 @@
 // ============================================================================
 
 ///|
+/// 规则冲突提示的「优先级差异较大」阈值（硬编码收敛 · 2026-11-20）
+/// 优先级差绝对值 >= 该值时，冲突汇总会追加排序建议提示
+const PRIORITY_DIFF_ADVICE_THRESHOLD = 50
+
+///|
 /// 取 JSON 对象里的字段
 fn jget(v : Json, key : String) -> Json? {
   match v {
@@ -107,7 +112,7 @@ fn parse_acceptance(v : Json?) -> Result[AcceptanceSpec?, String] {
           return Err("acceptance 含未知字段: " + key)
         }
       }
-      let mut expect_exit = 0
+      let mut expect_exit = DEFAULT_EXPECT_EXIT
       match m.get("expect_exit") {
         Some(Number(n, ..)) => expect_exit = n.to_int()
         Some(_) => return Err("acceptance.expect_exit 必须是整数")
@@ -278,7 +283,7 @@ fn parse_action(v : Json) -> Result[ActionSpec, String] {
       let body = jstr(m.get("body"))
       let ttl = match jint(m.get("ttl")) {
         Some(t) => t
-        None => 0
+        None => DEFAULT_TTL_SECONDS
       }
       let cleanup = match jstr(m.get("cleanup")) {
         Some(c) => c
@@ -428,7 +433,7 @@ fn parse_action(v : Json) -> Result[ActionSpec, String] {
               return Err("mcp_tool_call.transport 必须是 stdio/sse/http（当前: " + tl + "）")
             }
           }
-          None => Some("stdio")
+          None => Some(DEFAULT_MCP_TRANSPORT)
         }
       }
       Ok({
@@ -492,7 +497,7 @@ fn parse_guard(v : Json?) -> Result[GuardSpec?, String] {
       }
       let on_fail = match jstr(m.get("on_fail")) {
         Some(f) => f
-        None => "skip"
+        None => DEFAULT_GUARD_ON_FAIL
       }
       if on_fail != "skip" && on_fail != "stop" {
         return Err("guard.on_fail 必须是 \"skip\" 或 \"stop\"")
@@ -547,7 +552,7 @@ fn parse_rule(v : Json) -> Result[Rule, String] {
       }
       let priority = match jint(m.get("priority")) {
         Some(p) => p
-        None => 0
+        None => PRIORITY_MEDIUM_MIN
       }
       let guard_spec = match parse_guard(m.get("guard")) {
         Ok(g) => g
@@ -584,7 +589,7 @@ fn parse_logging_config(v : Json?) -> LoggingConfig {
       }
       let log_file = match jstr(m.get("log_file")) {
         Some(f) => f
-        None => "mcp-watcher.log"
+        None => DEFAULT_LOG_FILE
       }
       { enabled, log_dir, log_file, }
     }
@@ -677,7 +682,7 @@ fn detect_conflicts(rules : Array[Rule]) -> Array[String] {
 
             // 如果优先级差异较大，给出建议
             let diff = r1.priority - r2.priority
-            if diff.abs() >= 50 {
+            if diff.abs() >= PRIORITY_DIFF_ADVICE_THRESHOLD {
               conflicts.push(
                 "   💡 建议: 优先级差异较大 (" +
                 diff.abs().to_string() +
@@ -957,11 +962,11 @@ pub fn validate(cfg : Config) -> Result[Config, String] {
 /// 默认配置（测试 / 占位用）
 pub fn Config::default() -> Config {
   {
-    schema_version: 1,
+    schema_version: DEFAULT_SCHEMA_VERSION,
     watch_id: "",
     watch_dir: "",
-    recursive: true,
-    debounce_ms: 0,
+    recursive: DEFAULT_RECURSIVE,
+    debounce_ms: DEFAULT_DEBOUNCE_MS,
     rules: [],
     allowed_programs: [],
     extensions: [],

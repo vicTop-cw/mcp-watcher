@@ -28,7 +28,7 @@ fn mk_ev_acc() -> @watch.FsEvent {
 ///|
 /// artifact_glob_hit：命中（output/*.json）
 async test "artifact_glob_hit: hits real file" {
-  let base = "E:/IDEProjects/AI/mcp-watcher/action/.acceptance-test-hit"
+  let base = "action/.acceptance-test-hit"
   let _ = @fs.mkdir(base + "/output", recursive=true, allow_exist=true)
   defer (@fs.rmdir(base, recursive=true, allow_missing=true) catch { _ => () })
   @fs.write_file(base + "/output/result.json", "{}")
@@ -38,7 +38,7 @@ async test "artifact_glob_hit: hits real file" {
 ///|
 /// artifact_glob_hit：无命中（目录下无匹配文件）
 async test "artifact_glob_hit: no hit when file absent" {
-  let base = "E:/IDEProjects/AI/mcp-watcher/action/.acceptance-test-miss"
+  let base = "action/.acceptance-test-miss"
   let _ = @fs.mkdir(base, recursive=true, allow_exist=true)
   defer (@fs.rmdir(base, recursive=true, allow_missing=true) catch { _ => () })
   assert_false(@action.artifact_glob_hit(base, "output/*.json"))
@@ -47,7 +47,7 @@ async test "artifact_glob_hit: no hit when file absent" {
 ///|
 /// artifact_glob_hit：** 跨段命中；不匹配扩展名 → 无命中
 async test "artifact_glob_hit: ** crosses segments" {
-  let base = "E:/IDEProjects/AI/mcp-watcher/action/.acceptance-test-nested"
+  let base = "action/.acceptance-test-nested"
   let _ = @fs.mkdir(base + "/sub", recursive=true, allow_exist=true)
   defer (@fs.rmdir(base, recursive=true, allow_missing=true) catch { _ => () })
   @fs.write_file(base + "/sub/deep.txt", "x")

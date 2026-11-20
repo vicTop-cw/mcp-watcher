@@ -32,7 +32,7 @@ fn quiet_sch() -> @config.LoggingConfig {
 ///|
 test "e2e: internal reload_config 成功（stdout 带真实规则数）" {
   @rx.install_real_clock()
-  let tmp_rules = "E:/IDEProjects/AI/mcp-watcher/tests/harness/.ep01a-reload.json"
+  let tmp_rules = "tests/harness/.ep01a-reload.json"
   let rules_json =
     "{\"schema_version\":1,\"watch_id\":\"ep01a\",\"watch_dir\":\".\",\"rules\":[" +
     "{\"id\":\"r1\",\"events\":[\"create\"],\"patterns\":[\"*.tmp\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"a\"]}]}, " +
@@ -72,7 +72,7 @@ test "e2e: internal reload_config 成功（stdout 带真实规则数）" {
 test "e2e: internal reload_config 失败（文件不存在，可诊断且退出码 -1）" {
   @rx.install_real_clock()
   let state = @scheduler.WatcherState::new(
-    "E:/IDEProjects/AI/mcp-watcher/no-such-ep01a-file.json",
+    "no-such-ep01a-file.json",
     "ep01a",
     "C:/tmp",
   )

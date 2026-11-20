@@ -19,6 +19,15 @@
 // ============================================================================
 
 ///|
+/// 调度循环魔法数字收敛
+/// LOG_ROTATE_THRESHOLD：日志超过该条数时清空（轮转）
+/// MAIN_LOOP_SLEEP_MS：主循环休眠间隔（毫秒）
+const LOG_ROTATE_THRESHOLD = 1000
+const MAIN_LOOP_SLEEP_MS = 1000
+/// 热重载订阅数：create.* + modify.* 两条总线订阅
+const RELOAD_SUBSCRIBE_COUNT : Int32 = 2
+
+///|
 /// 真实执行记录（server test-mode 结果落盘的字段来源）
 ///
 /// 契约要求（server_contract.md §3）：只记录"真实触发的规则 + 实际 action 结果"。
@@ -357,11 +366,11 @@ pub async fn run_scheduler(config : @config.Config) -> Result[String, String] {
   // 阻塞等待，直到任务组被取消
   // 使用一个无限循环来保持调度器运行
   while true {
-    // 日志轮转：超过 1000 条时清空旧日志
-    if log.val.length() > 1000 {
+    // 日志轮转：超过 LOG_ROTATE_THRESHOLD 条时清空旧日志
+    if log.val.length() > LOG_ROTATE_THRESHOLD {
       log.val = []
     }
-    @async.sleep(1000)
+    @async.sleep(MAIN_LOOP_SLEEP_MS)
   }
   Ok("规则数 " + n.to_string() + "，订阅数 " + n.to_string())
 }
@@ -853,5 +862,5 @@ pub fn attach_rules_file_reload(
   }
   let _n1 = bus.subscribe("create.*", handler)
   let _n2 = bus.subscribe("modify.*", handler)
-  2
+  RELOAD_SUBSCRIBE_COUNT
 }

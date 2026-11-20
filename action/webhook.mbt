@@ -13,6 +13,21 @@
 // ============================================================================
 
 ///|
+/// webhook 缺省 HTTP 方法（schema 缺省语义）
+const DEFAULT_WEBHOOK_METHOD = "POST"
+
+///|
+/// 退避调度常量：基数 500ms、封顶 8000ms、attempt 归一上限 6
+const WEBHOOK_BACKOFF_BASE_MS = 500
+const WEBHOOK_BACKOFF_CAP_MS = 8000
+const WEBHOOK_BACKOFF_MAX_ATTEMPT = 6
+
+///|
+/// HTTP 成功状态码区间 [200, 300)（2xx 判定，RFC 9110 语义）
+const HTTP_STATUS_OK_MIN = 200
+const HTTP_STATUS_OK_EXCLUSIVE_MAX = 300
+
+///|
 /// 构造 HTTP 桥请求 JSON（字段顺序与键名与 ffi 桥契约逐位一致）
 pub fn webhook_request_json(
   url : String,
@@ -48,10 +63,10 @@ pub fn webhook_request_json(
 /// 指数退避：base 500ms × 2^attempt，封顶 8000ms；负 attempt 归一到首档。
 /// 本函数**只计算调度**，不真正 sleep/重试（红线：无重试循环；是否应用由上层决定）。
 pub fn webhook_backoff_delay_ms(attempt : Int32) -> Int32 {
-  let base = 500
-  let cap = 8000
-  let n = if attempt > 6 {
-    6
+  let base = WEBHOOK_BACKOFF_BASE_MS
+  let cap = WEBHOOK_BACKOFF_CAP_MS
+  let n = if attempt > WEBHOOK_BACKOFF_MAX_ATTEMPT {
+    WEBHOOK_BACKOFF_MAX_ATTEMPT
   } else {
     if attempt < 0 { 0 } else { attempt }
   }
@@ -114,7 +129,7 @@ pub fn run_webhook_action(
   }
   let mth = match spec.http_method {
     Some(m) if m != "" => m
-    _ => "POST"
+    _ => DEFAULT_WEBHOOK_METHOD
   }
   let body_raw = match spec.body {
     Some(b) => b
@@ -123,7 +138,7 @@ pub fn run_webhook_action(
   let timeout_ms = if spec.timeout_ms > 0 {
     spec.timeout_ms
   } else {
-    5000
+    @config.DEFAULT_ACTION_TIMEOUT_MS
   }
   // §7 占位符展开（url + body）
   let (url, warns_u) = render_placeholders(url_raw, ev, watch_dir, watch_id)
@@ -157,7 +172,7 @@ pub fn run_webhook_action(
   match j {
     { "ok": True, "status": Number(st, ..), "body": String(b), .. } => {
       let status = st.to_int()
-      let ok = status >= 200 && status < 300
+      let ok = status >= HTTP_STATUS_OK_MIN && status < HTTP_STATUS_OK_EXCLUSIVE_MAX
       if ok {
         ActionOutcome::new("webhook", true, status, b, "")
       } else {

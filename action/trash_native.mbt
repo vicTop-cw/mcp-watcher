@@ -5,13 +5,19 @@
 // trash_stub.mbt 门控降级。wasm 虽编译通过但 fs 为 unimplemented，一并 stub。
 
 ///|
-/// 将文件移入 `<watch_dir>/.trash/<basename>.<epoch_ns>`（native 真做实）。
+/// 回收目录名（默认 `<watch_dir>/.trash`，与文档契约一致）
+pub const TRASH_DIR_NAME = ".trash"
+/// trash 物理回收失败错误前缀（诊断输出契约）
+const TRASH_FAIL_PREFIX = "trash 物理回收失败: "
+
+///|
+/// 将文件移入 `<watch_dir>/<TRASH_DIR_NAME>/<basename>.<epoch_ns>`（native 真做实）。
 ///
 /// - 回收目录不存在则递归创建（allow_exist=true，幂等）；
 /// - 目标名带纳秒时间戳，避免同名覆盖；
 /// - 任一步失败返回 Err（可诊断），不吞错。
 pub async fn trash_file(path : String, watch_dir : String) -> Result[Unit, String] {
-  let trash_dir = watch_dir + "/.trash"
+  let trash_dir = watch_dir + "/" + TRASH_DIR_NAME
   let file_name = base_name(path)
   let stamp = Int64::to_string(@rx.real_now())
   let dest = trash_dir + "/" + file_name + "." + stamp
@@ -20,7 +26,7 @@ pub async fn trash_file(path : String, watch_dir : String) -> Result[Unit, Strin
     @fs.rename(path, dest, replace=true)
     Ok(())
   } catch {
-    e => Err("trash 物理回收失败: " + e.to_string())
+    e => Err(TRASH_FAIL_PREFIX + e.to_string())
   }
 }
 

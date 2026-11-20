@@ -22,6 +22,30 @@
 // ============================================================================
 
 ///|
+/// command 动作默认超时（秒，ExecPolicy 第三参数；0 = 不超时）
+const EXEC_COMMAND_TIMEOUT_SECONDS = 60.0
+
+///|
+/// RX-MBT 0.4.4 exec_error_text 契约（parse_exit_error 解析锚点）
+/// 非零退出 → "执行失败: 退出码 N[；stderr: S]"，与 moon.mod 锁定版本绑定。
+const RX_EXIT_ERROR_PREFIX = "执行失败: 退出码 "
+const RX_EXIT_STDERR_SEP = "；stderr: "
+
+///|
+/// exec_error_text 映射文本（v1.0 输出契约，不可随意改动）
+const EXEC_ERR_TEXT_POLICY_DENIED = "策略拒绝: "
+const EXEC_ERR_TEXT_SPAWN_FAILED = "执行失败: "
+const EXEC_ERR_TEXT_OTHER = "执行错误"
+
+///|
+/// 秒 → 纳秒换算（TTL 到期判定；1s = 1e9 ns）
+const NS_PER_SECOND : Int64 = 1_000_000_000L
+
+///|
+/// internal 动作注册表初始容量（预分配避免扩容抖动；仅性能提示，无语义）
+const INTERNAL_REGISTRY_INIT_CAPACITY = 4
+
+///|
 /// 动作扩展点：具体执行体
 pub trait Action {
   fn run(self : Self, ev : @watch.FsEvent) -> Result[Unit, String]
@@ -78,7 +102,7 @@ pub fn build_policy(allow_programs : Array[String]) -> @rt.ExecPolicy {
   for p in allow_programs {
     allow.push("cli:" + p)
   }
-  @rt.ExecPolicy::new(allow, false, 60.0)
+  @rt.ExecPolicy::new(allow, false, EXEC_COMMAND_TIMEOUT_SECONDS)
 }
 
 // ============================================================================
@@ -175,7 +199,7 @@ pub fn acceptance_check(
 /// 注意：rx 非零路径不交付 stdout（Observable 层丢弃），本函数只能恢复
 /// exit_code 与 stderr——这是 rx 侧限制，诚实标注。
 pub fn parse_exit_error(text : String) -> (Int32, String)? {
-  let prefix = "执行失败: 退出码 "
+  let prefix = RX_EXIT_ERROR_PREFIX
   if !text.has_prefix(prefix) {
     return None
   }
@@ -198,7 +222,7 @@ pub fn parse_exit_error(text : String) -> (Int32, String)? {
     None => None
     Some(c) => {
       let tail = rest[i:].to_owned()
-      let sep = "；stderr: "
+      let sep = RX_EXIT_STDERR_SEP
       if tail.has_prefix(sep) {
         Some((c, tail[sep.length():].to_owned()))
       } else {
@@ -484,7 +508,7 @@ pub fn ProductTracker::expired_records(
   for record in tracker.records {
     if record.ttl_seconds > 0 {
       let age_ns = now_ns - record.created_at_ns
-      let ttl_ns = Int64::from_int(record.ttl_seconds) * 1_000_000_000
+      let ttl_ns = Int64::from_int(record.ttl_seconds) * NS_PER_SECOND
       if age_ns >= ttl_ns {
         out.push(record)
       }
@@ -711,9 +735,9 @@ pub fn escape_json_string(s : String) -> String {
 /// 把 rx 的 `ExecError` 转成可读文本
 pub fn exec_error_text(e : @rt.ExecError) -> String {
   match e {
-    @rt.ExecError::PolicyDenied(msg) => "策略拒绝: " + msg
-    @rt.ExecError::SpawnFailed(msg) => "执行失败: " + msg
-    _ => "执行错误"
+    @rt.ExecError::PolicyDenied(msg) => EXEC_ERR_TEXT_POLICY_DENIED + msg
+    @rt.ExecError::SpawnFailed(msg) => EXEC_ERR_TEXT_SPAWN_FAILED + msg
+    _ => EXEC_ERR_TEXT_OTHER
   }
 }
 
@@ -936,7 +960,7 @@ pub struct InternalRegistry {
 ///|
 /// 构造空注册表
 pub fn InternalRegistry::new() -> InternalRegistry {
-  { handlers: Map([], capacity=4) }
+  { handlers: Map([], capacity=INTERNAL_REGISTRY_INIT_CAPACITY) }
 }
 
 ///|
