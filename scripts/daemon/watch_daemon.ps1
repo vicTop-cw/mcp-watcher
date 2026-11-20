@@ -1,12 +1,15 @@
-# FIST self-tidy daemon self-heal launcher (pure ASCII; scheduled every 5 min)
+# mcp-watcher daemon self-heal launcher (pure ASCII; scheduled every 5 min)
 # Rule: if the node daemon (pid in temp/wt-daemon.pid) is alive, do nothing.
 # Else start it hidden: mcp-watcher js daemon, debounce 0 (js clock gap workaround).
+# Paths are derived from the script location (project root = script\..\..), no hardcode.
 $ErrorActionPreference = "Stop"
-$root    = "E:\IDEProjects\AI\FIST-Mbt"
-$main    = "E:\IDEProjects\AI\_build\js\debug\build\cmd\main\main.js"
-$pidFile = Join-Path $root "temp\wt-daemon.pid"
-$logFile = Join-Path $root "temp\wt-daemon.log"
-New-Item -ItemType Directory -Force -Path (Join-Path $root "temp") | Out-Null
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root      = [System.IO.Path]::GetFullPath((Join-Path $scriptDir "..\.."))
+$main      = Join-Path $root "_build\js\debug\build\cmd\main\main.js"
+$tempDir   = Join-Path $root "temp"
+$pidFile   = Join-Path $tempDir "wt-daemon.pid"
+$logFile   = Join-Path $tempDir "wt-daemon.log"
+New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 if (Test-Path $pidFile) {
     $old = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
     if ($old -match '^\d+$') {
@@ -17,8 +20,8 @@ if (Test-Path $pidFile) {
 }
 $argList = @(
     $main, "run",
-    "--rules", "E:\IDEProjects\AI\FIST-Mbt\.mcp-watch.json",
-    "--watch-dir", "E:\IDEProjects\AI\FIST-Mbt",
+    "--rules", (Join-Path $root ".mcp-watch.json"),
+    "--watch-dir", $root,
     "--debounce-ms", "0"
 )
 $p = Start-Process -FilePath "node" -ArgumentList $argList -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $logFile -RedirectStandardError "$logFile.err" -PassThru

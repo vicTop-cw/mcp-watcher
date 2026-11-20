@@ -10,9 +10,14 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${SCRIPT_DIR}/../.."
-# moon.work 位于 E:/IDEProjects/AI，native 产物落在工作区的 _build 下
+# moon.work 位于项目上一级时，native 产物可能落在工作区或项目 _build 下，
+# 用 glob 兜底定位（避免硬编码绝对路径）
 WORK_DIR="$(cd "${PROJECT_DIR}/.." && pwd)"
-BIN="${WORK_DIR}/_build/native/debug/build/cmd/main/main.exe"
+BIN=""
+for cand in "${PROJECT_DIR}/_build" "${WORK_DIR}/_build"; do
+  hit="$(find "${cand}" -path '*/cmd/main/*.exe' -type f 2>/dev/null | head -n1)"
+  if [ -n "${hit}" ]; then BIN="${hit}"; break; fi
+done
 
 SCENARIO="${1:-basic}"
 WATCH_DIR="${SCRIPT_DIR}/.watch"
