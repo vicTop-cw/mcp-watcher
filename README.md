@@ -93,8 +93,8 @@ mcp-watcher 不是一个"通用的文件监控触发器"。它是面向 AI 工�
 | `action`    | 生命周期动作（TTL✅ / trash native✅·其他🚧 / 加密🚧 / command✅…）扩展点 EP-01 |
 | `ext`       | 扩展位注册表（EP-01~EP-12） |
 | `cron`      | cron 表达式解析与下次触发计算（纯逻辑、可测） |
-| `scheduler` | 事件源 + cron 合并的主循环（待接入 rx EventBus） |
-| `cmd/main`  | CLI 入口（start/stop/status/run/validate） |
+| `scheduler` | 事件源 + cron 合并的主循环（已接入 rx EventBus；含 guard/acceptance 双门禁与热重载接线） |
+| `cmd/main`  | CLI 入口（validate/start/status/run/reload/help；stop 为 P1） |
 
 > 实现期将复用兄弟项目 **rx-mbt**（响应式内核：EventBus / 真实时钟 / 原生监控 / 命令 Observable），详见 `rx-mbt/PLAN-mcp-watcher-apis.md`。
 
@@ -104,23 +104,27 @@ mcp-watcher 不是一个"通用的文件监控触发器"。它是面向 AI 工�
 
 - ✅ 产品定位与四大支柱（本文）
 - ✅ 详细设计决议 `workbuddy/plan/design-spec.md`、配置契约 `config-schema.md`、rx 依赖决策 `rx-mbt-dependency.md`、复用与测试规划 `reuse-and-test-plan.md`
-- ✅ **项目架构脚手架已落地**（本仓库包结构与核心类型）：`config`/`watch`/`rule`/`action`/`ext`/`cron`/`scheduler`/`cmd/main` 八个包 + `moon.mod`；提案与执行汇报见 `fist-mbt/plans/`、`fist-mbt/reports/`
-  - 门禁（当时的历史快照，现状见下）：`moon check --target native` 0 error；`moon test --target native` 21/21 通过。当前门禁以 `bash scripts/test_all.sh` 为准（check 0 error + 三目标各 87 测试 + e2e 全绿）。
-- ✅ 已完成：接入 rx-mbt 0.4.4（R1~R4）、CLI 子命令、TTL 生命周期动作、双进程端到端测试（`tests/harness/`）
-- 🚧 规划中：热重载（P2）、加密（rx 无 native Fernet，见 `workbuddy/plan/p3-feasibility.md`）、mcp/webhook 扩展位
-- ✅ 已落地：trash 物理回收（native，async fs mkdir/rename；js/wasm 诚实降级）
+- ✅ **项目架构已落地**（本仓库包结构与核心类型）：`config`/`watch`/`rule`/`action`/`ext`/`cron`/`scheduler`/`cmd/main` 八个包 + `moon.mod`；提案与执行汇报见 `fist-mbt/plans/`、`fist-mbt/reports/`
+  - 门禁（2026-11-20 实测）：`moon check` 0 errors（36 条 Warning）；`moon test --target native` **222/222**；`moon test --target js` **191/191**；wasm-gc 编译失败（RX-MBT fs_* 未绑定，依赖侧缺口）；双进程 e2e 存在守护进程监控缺陷（见 `USAGE.md` §6.1），事件可达性已由 RX-MBT 探针证明。
+- ✅ 已完成：接入 rx-mbt 0.4.4（R1~R4）、CLI 子命令（validate/start/status/run/reload）、TTL 生命周期动作、trash 物理回收（native）、command + ExecPolicy 白名单、双门禁 guard/acceptance（schema v1.1）、热重载（EP-01d）、internal 动作四 op（EP-01a）、双进程集成测试物料（`tests/harness/`）
+- 🚧 规划中：加密（rx 无 native Fernet，见 `workbuddy/plan/p3-feasibility.md`）、mcp_tool_call/webhook 扩展位（EP-01）、守护进程监控缺陷修复（P1）、CLI stop 子命令（P1）
 
 ---
 
-## 快速开始（实现后）
+## 快速开始
 
 ```bash
 moon build --target native
-./mcp-watch validate --config .mcp-watch.json   # 校验规则
-./mcp-watch run      --config .mcp-watch.json   # 后台自治运行
-./mcp-watch status                            # 观测
-./mcp-watch stop                               # 终止
+
+# 产物：_build/native/debug/build/cmd/main/main.exe
+./_build/native/debug/build/cmd/main/main.exe validate --rules .mcp-watch.json      # 校验规则
+./_build/native/debug/build/cmd/main/main.exe run --rules .mcp-watch.json --watch-dir .   # 后台自治运行
+./_build/native/debug/build/cmd/main/main.exe status --rules .mcp-watch.json --watch-dir .   # 观测
+./_build/native/debug/build/cmd/main/main.exe reload --rules .mcp-watch.json        # 热重载
 ```
+
+> 完整使用说明（规则文件写法、字段说明、双门禁配置、FAQ）见 `USAGE.md`。
+> 已知限制：`stop` 子命令待实现（P1）；规则文件目录不在 `watch_dir` 内时 `run` 存在监控缺陷（见 `USAGE.md` §6.1）。
 
 ---
 
@@ -133,3 +137,8 @@ moon build --target native
 - `rx-mbt/PLAN-mcp-watcher-apis.md` — rx 增资计划
 - `tests/harness/README.md` — 双进程集成测试物料
 - `fist-mbt/plans/2026-11-12-architecture-proposal.md` — 本项目架构提案（FIST）
+- `competition/项目申报书.md` — 项目申报材料（验收读数见申报书 §11）
+
+## 使用文档
+
+- `USAGE.md` — 安装构建 / 规则编写 / CLI 用法 / 双门禁配置 / 常见问题
