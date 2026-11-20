@@ -89,3 +89,60 @@ test "派发：返回全部命中规则" {
   assert_eq(hit.length(), 1)
   assert_eq(hit[0].id, "r1")
 }
+
+///|
+test "EP-03：大小写不敏感（盘上 casing 与规则书写 casing 不一致）" {
+  // 盘上真实目录名 .Fist-Mbt，规则书写 .fist-mbt（Windows 大小写不敏感语义）
+  let rule = mk_rule("r3", ["modify"], [".fist-mbt/data/fist-self-tidy.db*"], [], None)
+  let ev = mk_event(
+    @config.EventType::Modify,
+    "E:/IDEProjects/AI/FIST-Mbt/.Fist-Mbt/data/fist-self-tidy.db-wal",
+    10,
+  )
+  assert_true(@rule.matches_event(rule, ev))
+}
+
+///|
+test "EP-03：相对模式匹配绝对路径（前缀自动补 **/ 吸收根段）" {
+  let rule = mk_rule("r4", ["modify"], [".fist-mbt/data/*.db*"], [], None)
+  let ev = mk_event(
+    @config.EventType::Modify,
+    "E:/IDEProjects/AI/FIST-Mbt/.fist-mbt/data/fist-self-tidy.db",
+    10,
+  )
+  assert_true(@rule.matches_event(rule, ev))
+}
+
+///|
+test "EP-03：已带 **/ 的模式不重复补前缀 + exclude 同样大小写不敏感" {
+  let rule = mk_rule(
+    "r5",
+    ["modify"],
+    ["**/.fist-mbt/data/*.db*"],
+    [".fist-mbt/data/*.db-shm"],
+    None,
+  )
+  let hit = mk_event(
+    @config.EventType::Modify,
+    "E:/IDEProjects/AI/FIST-Mbt/.Fist-Mbt/data/fist-self-tidy.db-wal",
+    10,
+  )
+  let excluded = mk_event(
+    @config.EventType::Modify,
+    "E:/IDEProjects/AI/FIST-Mbt/.Fist-Mbt/data/fist-self-tidy.db-shm",
+    10,
+  )
+  assert_true(@rule.matches_event(rule, hit))
+  assert_false(@rule.matches_event(rule, excluded))
+}
+
+///|
+test "EP-03：basename 分支大小写不敏感（BACKLOG.md 类规则回归）" {
+  let rule = mk_rule("r6", ["modify"], ["backlog.md"], [], None)
+  let ev = mk_event(
+    @config.EventType::Modify,
+    "E:/IDEProjects/AI/FIST-Mbt/BACKLOG.md",
+    10,
+  )
+  assert_true(@rule.matches_event(rule, ev))
+}
