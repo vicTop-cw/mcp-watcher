@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "watch_id": "agent-service-up-notify",
+  "watch_dir": "E:/IDEProjects/AI/FIST-Mbt",
+  "recursive": true,
+  "debounce_ms": 1500,
+  "allowed_programs": ["python"],
+  "rules": [
+    {
+      "id": "agent-service-up-notify-laya",
+      "events": ["create", "modify"],
+      "patterns": ["**/model-router-default.json"],
+      "exclude": [],
+      "actions": [
+        {
+          "kind": "command",
+          "argv": [
+            "python",
+            "E:/IDEProjects/AI/FIST-Mbt/scripts/notify_agent_service_up.py",
+            "E:/IDEProjects/AI/FIST-Mbt/.fist-mbt/data/model-router-default.json"
+          ],
+          "timeout_ms": 30000,
+          "description": "fist-agent 服务上线→追加 laya 收件箱（免费高优模型端点可用）"
+        }
+      ]
+    }
+  ]
+}
