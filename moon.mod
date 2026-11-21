@@ -1,5 +1,5 @@
 name = "vicTop-cw/mcp-watcher"
-version = "0.2.1"
+version = "0.2.2"
 readme = "README.md"
 repository = "https://github.com/vicTop-cw/mcp-watcher"
 license = "Apache-2.0"

@@ -46,7 +46,7 @@ moon run cmd/main -- validate --rules .mcp-watch.json
 moon run cmd/main -- run --rules .mcp-watch.json --watch-dir .
 ```
 
-> 版本以 `moon.mod` 声明为准（当前 0.2.1）。CLI `help` 输出的版本号已收敛到共享常量源 `util/version.mbt` 的 `APP_VERSION`，与 `moon.mod` 保持一致。
+> 版本以 `moon.mod` 声明为准（当前 0.2.2）。CLI `help` 输出的版本号已收敛到共享常量源 `util/version.mbt` 的 `APP_VERSION`，与 `moon.mod` 保持一致。
 
 ## 3. 规则文件：`.mcp-watch.json`
 
