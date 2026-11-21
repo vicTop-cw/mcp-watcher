@@ -7,6 +7,7 @@ import {
   "vicTop-cw/RX-MBT/rhop_task" @rt,
   "vicTop-cw/RX-MBT/monitor" @mon,
   "moonbitlang/core/ref",
+  "moonbitlang/core/string",
   "moonbitlang/core/debug",
   "moonbitlang/core/async",
 }

@@ -94,7 +94,7 @@ moon run cmd/main -- run --rules .mcp-watch.json --watch-dir .
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `id` | string | 规则唯一 id（热重载按 id 分派 live 版本） |
-| `events` | array\<string\> | `create` / `modify` / `delete` / `rename` / `attrib` / `all` |
+| `events` | array\<string\> | 文件事件 `create` / `modify` / `delete` / `rename` / `attrib` / `all`；或 interval 触发源 `interval:<ms>`（EP-03b，最小 1000ms，走真实时钟定时发射，可与其他事件类型混用） |
 | `patterns` | array\<string\> | glob 模式（如 `*.tmp`、`**/*.log`） |
 | `exclude` | array\<string\> | 排除模式，**优先于** patterns 匹配 |
 | `conditions` | array\<object\> | 条件（AND 语义）：`age_seconds` / `file_size_gt` / `file_size_lt` / `mime_contains` / `not_modified_for` / `custom_script` |
@@ -135,7 +135,7 @@ moon run cmd/main -- run --rules .mcp-watch.json --watch-dir .
 | `{file.ext}` | 文件扩展名（不含点） |
 | `{file.size}` | 文件大小（字节） |
 | `{file.mtime}` | 文件最后修改时间 |
-| `{event.type}` | 事件类型（create / modify / delete / rename / attrib） |
+| `{event.type}` | 事件类型（create / modify / delete / rename / attrib / interval） |
 | `{watch_dir}` | 监控根目录 |
 | `{watch_id}` | 监控实例 id |
 

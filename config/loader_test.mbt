@@ -680,3 +680,37 @@ test "internal: v1.0 command action unaffected" {
     Err(_) => assert_true(false)
   }
 }
+
+///|
+/// EP-03b：interval 触发源——"interval:<ms>" 条目解析成功，保留进 rule.events
+test "interval_rule: interval 条目解析成功" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-ivl\",\"events\":[\"interval:60000\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"tick\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(cfg) => {
+      let r = cfg.rules[0]
+      assert_eq(r.events.length(), 1)
+      assert_eq(r.events[0], "interval:60000")
+    }
+    Err(_) => assert_true(false)
+  }
+}
+
+///|
+/// EP-03b：interval 毫秒数非法应报错
+test "interval_invalid_ms: 报错" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-ivl\",\"events\":[\"interval:abc\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"tick\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(_) => assert_true(false)
+    Err(err) => assert_true(err.contains("interval 毫秒数非法"))
+  }
+}
+
+///|
+/// EP-03b：interval 间隔低于下限应报错
+test "interval_too_small: 报错" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-ivl\",\"events\":[\"interval:500\"],\"patterns\":[\"**/*\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"tick\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(_) => assert_true(false)
+    Err(err) => assert_true(err.contains("interval 触发间隔过小"))
+  }
+}

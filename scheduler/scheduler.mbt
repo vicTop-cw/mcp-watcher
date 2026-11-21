@@ -112,76 +112,92 @@ pub fn attach_rules(
     if executed_rules.val.contains(rule.id) {
       continue
     }
+    // EP-03b：共享触发体——文件事件与 interval 触发走同一 handler 链
+    //（退场记账/live 分派/守卫/验收/动作全共享），仅触发来源不同。
+    let fire = fn(fe : @watch.FsEvent) -> Unit {
+      // 检查是否已退场（once 语义 / guard on_fail=stop 退场）
+      if executed_rules.val.contains(rule.id) {
+        return
+      }
+      // EP-01d 热重载：共享规则表存在时，取同 id 的 live 版本分派；
+      // 该规则被 reload 移除 → 本订阅 no-op
+      let live : @config.Rule? =
+        match rules_ref {
+          Some(rr) => rule_by_id(rr.val, rule.id)
+          None => Some(rule)
+        }
+      // 此后以 live 版本分派（遮蔽原 rule；id 相同，退场记账不受影响）
+      let rule = match live {
+        Some(l) => l
+        None => return
+      }
+      // interval 触发（live 规则含 interval 条目）无文件事件语义（类型/
+      // 模式匹配），直达守卫/动作；热重载摘除 interval 后退化为 dispatch
+      // 路径，合成事件空路径不命中 patterns，安全 no-op
+      let matched = if interval_ms_of(rule) > 0L {
+        true
+      } else {
+        @rule.dispatch([rule], fe).length() > 0
+      }
+      if matched {
+        // 守卫门（schema v1.1）：执行前环境准入，通过才执行 actions
+        let proceed = match rule.guard_spec {
+          Some(g) => {
+            let gr = @action.run_guard(g, fe, policy)
+            if gr.passed {
+              true
+            } else {
+              // 守卫不过：记 guard_fail 事件（可观测 + 落结果记录），
+              // 按 on_fail 决策：skip 只跳过 / stop 再退场本规则
+              let (skip_actions, retire) = guard_fail_decision(g.on_fail)
+              log.val.push(
+                "rule " + rule.id + " guard_fail: " + gr.reason,
+              )
+              records.val.push(
+                ExecRecord::new(
+                  rule.id,
+                  fe.event_type.to_string(),
+                  fe.path,
+                  "guard",
+                  -1,
+                  "",
+                  gr.reason,
+                ),
+              )
+              if retire {
+                executed_rules.val.push(rule.id)
+              }
+              !skip_actions
+            }
+          }
+          None => true
+        }
+        if proceed {
+          exec_actions(
+            rule, fe, policy, logging_config, watch_dir, watch_id,
+            log, records, registry,
+          )
+          // 记录已执行（once 语义）
+          if rule.stop_after {
+            executed_rules.val.push(rule.id)
+          }
+        }
+      }
+    }
     for ev_name in event_names_of(rule) {
       let _ = bus.subscribe(ev_name, fn(ev : @rx.TriggerEvent[@watch.FsEvent]) {
-        let fe = ev.payload
-        // 检查是否已退场（once 语义 / guard on_fail=stop 退场）
-        if executed_rules.val.contains(rule.id) {
-          return
-        }
-        // EP-01d 热重载：共享规则表存在时，取同 id 的 live 版本分派；
-        // 该规则被 reload 移除 → 本订阅 no-op
-        let live : @config.Rule? =
-          match rules_ref {
-            Some(rr) => rule_by_id(rr.val, rule.id)
-            None => Some(rule)
-          }
-        if (match live {
-          None => true
-          Some(_) => false
-        }) {
-          return
-        }
-        // 此后以 live 版本分派（遮蔽原 rule；id 相同，退场记账不受影响）
-        let rule = match live {
-          Some(l) => l
-          None => rule
-        }
-        let matched = @rule.dispatch([rule], fe)
-        if matched.length() > 0 {
-          // 守卫门（schema v1.1）：执行前环境准入，通过才执行 actions
-          let proceed = match rule.guard_spec {
-            Some(g) => {
-              let gr = @action.run_guard(g, fe, policy)
-              if gr.passed {
-                true
-              } else {
-                // 守卫不过：记 guard_fail 事件（可观测 + 落结果记录），
-                // 按 on_fail 决策：skip 只跳过 / stop 再退场本规则
-                let (skip_actions, retire) = guard_fail_decision(g.on_fail)
-                log.val.push(
-                  "rule " + rule.id + " guard_fail: " + gr.reason,
-                )
-                records.val.push(
-                  ExecRecord::new(
-                    rule.id,
-                    fe.event_type.to_string(),
-                    fe.path,
-                    "guard",
-                    -1,
-                    "",
-                    gr.reason,
-                  ),
-                )
-                if retire {
-                  executed_rules.val.push(rule.id)
-                }
-                !skip_actions
-              }
-            }
-            None => true
-          }
-          if proceed {
-            exec_actions(
-              rule, fe, policy, logging_config, watch_dir, watch_id,
-              log, records, registry,
-            )
-            // 记录已执行（once 语义）
-            if rule.stop_after {
-              executed_rules.val.push(rule.id)
-            }
-          }
-        }
+        fire(ev.payload)
+      })
+      subscribed.val = subscribed.val + 1
+    }
+    // EP-03b：interval 触发源——events 里的 "interval:<ms>" 条目经 EP-01d
+    // 真实时钟泵驱动的 @rx.interval 发射（subscribe 即注册，回调按真实时间
+    // 触发，免任务组）；合成事件空路径 + Other 类型，fire 内按 live 规则的
+    // interval-ness 跳过 dispatch
+    if interval_ms_of(rule) > 0L {
+      let _ = @rx.interval(interval_ms_of(rule)).subscribe_on_next(fn(tick : Int64) {
+        let _ = tick
+        fire(@watch.FsEvent::new(@config.EventType::Interval, "", false, 0, 0))
       })
       subscribed.val = subscribed.val + 1
     }
@@ -321,6 +337,27 @@ pub fn event_names_of(rule : @config.Rule) -> Array[String] {
     }
   }
   names
+}
+
+///|
+/// EP-03b：interval 触发源毫秒数（events 里的 "interval:<ms>" 条目）。
+/// 无 interval 条目或毫秒数非法返回 0；低于 INTERVAL_MIN_MS 触底到下限；
+/// 多个 interval 条目取首个有效值。
+pub fn interval_ms_of(rule : @config.Rule) -> Int64 {
+  for e in rule.events {
+    if e.has_prefix("interval:") {
+      match (try Ok(@string.parse_int64(e[9:].to_owned())) catch { err => Err(err) }) {
+        Ok(ms) =>
+          return if ms < @config.INTERVAL_MIN_MS {
+            @config.INTERVAL_MIN_MS
+          } else {
+            ms
+          }
+        Err(_) => return 0L
+      }
+    }
+  }
+  0L
 }
 
 ///|

@@ -518,8 +518,27 @@ fn parse_rule(v : Json) -> Result[Rule, String] {
         None => ""
       }
       let events = jstr_array(m.get("events"))
-      // 验证事件类型
+      // 验证事件类型（EP-03b：interval:<ms> 触发源放行，间隔下限 INTERVAL_MIN_MS）
       for e in events {
+        if e.has_prefix("interval:") {
+          match (try Ok(@string.parse_int64(e[9:].to_owned())) catch { err => Err(err) }) {
+            Ok(ms) =>
+              if ms < INTERVAL_MIN_MS {
+                return Err(
+                  "规则 " +
+                  id +
+                  ": interval 触发间隔过小 '" +
+                  e +
+                  "'（下限 " +
+                  INTERVAL_MIN_MS.to_string() +
+                  "ms）",
+                )
+              }
+            Err(_) =>
+              return Err("规则 " + id + ": interval 毫秒数非法 '" + e + "'")
+          }
+          continue
+        }
         match EventType::from_string(e) {
           Some(_) => ()
           None =>

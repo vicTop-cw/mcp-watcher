@@ -52,6 +52,11 @@ const DEFAULT_RECURSIVE = true
 const DEFAULT_DEBOUNCE_MS = 0
 
 ///|
+/// EP-03b：interval 触发源（events 条目 "interval:<ms>"）最小触发间隔（毫秒）。
+/// 下限防误配亚秒级定时器风暴；loader 校验与 scheduler 取值共用此常量。
+pub const INTERVAL_MIN_MS : Int64 = 1000
+
+///|
 /// 事件类型（与 watch 层 FsEvent.event_type 对应）
 #derive(Eq, Debug)
 pub(all) enum EventType {
@@ -61,6 +66,10 @@ pub(all) enum EventType {
   Rename
   Attrib
   All
+  /// EP-03b：interval 触发源合成事件类型——不来自文件系统，仅由
+  /// @rx.interval 定时发射；from_string 不收裸 "interval"（间隔必须带
+  /// ":ms" 后缀，见 loader 校验）
+  Interval
 }
 
 ///|
@@ -126,6 +135,7 @@ pub fn EventType::to_string(self : EventType) -> String {
     Rename => "rename"
     Attrib => "attrib"
     All => "all"
+    Interval => "interval"
   }
 }
 

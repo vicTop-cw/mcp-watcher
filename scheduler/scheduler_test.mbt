@@ -167,3 +167,25 @@ test "guard_fail_decision: unknown value defensive" {
   assert_true(skip_actions)
   assert_false(retire)
 }
+
+///|
+/// EP-03b：interval_ms_of —— 解析 "interval:<ms>" 条目
+test "interval_ms_of: 解析 interval 条目" {
+  let r = mk_rule("rule-ivl", ["interval:60000"], 1, false)
+  assert_eq(@scheduler.interval_ms_of(r), 60000L)
+}
+
+///|
+/// EP-03b：interval_ms_of —— 无 interval 条目返回 0
+test "interval_ms_of: 无 interval 条目返回 0" {
+  let r = mk_rule("rule-fs", ["modify"], 1, false)
+  assert_eq(@scheduler.interval_ms_of(r), 0L)
+}
+
+///|
+/// EP-03b：interval_ms_of —— 低于下限触底到 INTERVAL_MIN_MS（解析层已拦，
+/// 此为防御性第二道闸）
+test "interval_ms_of: 低于下限触底" {
+  let r = mk_rule("rule-ivl", ["interval:200"], 1, false)
+  assert_eq(@scheduler.interval_ms_of(r), @config.INTERVAL_MIN_MS)
+}
