@@ -151,7 +151,7 @@ fn mk_stub_registry(ok~ : Bool = true) -> @action.InternalRegistry {
 test "fire_rules_reload: 经 internal 通道触发 reload_config（成功落 log）" {
   let state = @scheduler.WatcherState::new("rules.json", "w", ".")
   let log : Ref[Array[String]] = Ref::Ref([])
-  @scheduler.fire_rules_reload(
+  let _ = @scheduler.fire_rules_reload(
     mk_stub_registry(),
     state,
     mk_re_ev("rules.json", @config.EventType::Modify),
@@ -165,7 +165,7 @@ test "fire_rules_reload: 经 internal 通道触发 reload_config（成功落 log
 test "fire_rules_reload: op 未注册 → 可诊断 log，不抛异常" {
   let state = @scheduler.WatcherState::new("rules.json", "w", ".")
   let log : Ref[Array[String]] = Ref::Ref([])
-  @scheduler.fire_rules_reload(
+  let _ = @scheduler.fire_rules_reload(
     @action.InternalRegistry::new(),
     state,
     mk_re_ev("x", @config.EventType::Modify),
@@ -179,7 +179,7 @@ test "fire_rules_reload: op 未注册 → 可诊断 log，不抛异常" {
 test "fire_rules_reload: op 失败 → err log 含原因" {
   let state = @scheduler.WatcherState::new("rules.json", "w", ".")
   let log : Ref[Array[String]] = Ref::Ref([])
-  @scheduler.fire_rules_reload(
+  let _ = @scheduler.fire_rules_reload(
     mk_stub_registry(ok=false),
     state,
     mk_re_ev("x", @config.EventType::Modify),

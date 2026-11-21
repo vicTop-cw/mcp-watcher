@@ -257,6 +257,8 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
     args.rules, cfg.watch_id, cfg.watch_dir, rules_ref=Some(rules_ref),
   )
   let reg = @scheduler.build_internal_registry(state)
+  // EP-02b：已挂账 id 集——热重载增量重挂的差集依据
+  let attached_ids : Ref[Array[String]] = Ref::Ref([])
   let n = @scheduler.attach_rules(
     cfg.rules,
     bus,
@@ -268,6 +270,7 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
     watch_id=cfg.watch_id,
     registry=reg,
     rules_ref=Some(rules_ref),
+    attached_ids=Some(attached_ids),
   )
   println("  已注册订阅：" + n.to_string())
 
@@ -279,8 +282,40 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
   } else {
     RELOAD_WINDOW_MIN_MS
   }
+  // EP-02b：热切换成功后对新增 id 增量重挂订阅（免重启生效）——复用
+  // attach_rules 全机制（event_names_of / interval 触发源 / 记账）；
+  // 既有 id 的修改由 live 分派覆盖、移除由 no-op 覆盖，均无需重挂
+  let reattach = fn(new_rules : Array[@config.Rule]) -> Unit {
+    let fresh : Array[@config.Rule] = []
+    for r in new_rules {
+      if !attached_ids.val.contains(r.id) {
+        fresh.push(r)
+      }
+    }
+    if fresh.length() > 0 {
+      let _ = @scheduler.attach_rules(
+        fresh,
+        bus,
+        policy,
+        cfg.watch_dir,
+        cfg.logging,
+        log,
+        records,
+        watch_id=cfg.watch_id,
+        registry=reg,
+        rules_ref=Some(rules_ref),
+        attached_ids=Some(attached_ids),
+      )
+      println(
+        "[reload] 新增规则订阅：" +
+        fresh.length().to_string() +
+        " 条（免重启生效）",
+      )
+    }
+  }
   let nrl = @scheduler.attach_rules_file_reload(
     bus, state, reg, reload_window, log,
+    on_rules_swapped=Some(reattach),
   )
   println("  rules_file 热重载订阅：" + nrl.to_string())
 

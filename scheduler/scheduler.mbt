@@ -100,6 +100,9 @@ pub fn attach_rules(
   // EP-01d 共享规则表（热重载）：Some = 按同 id 的 live 版本分派（被 reload
   // 移除的规则 no-op）；None = 静态表（v1.0 行为，位级兼容）
   rules_ref~ : Ref[Array[@config.Rule]]? = None,
+  // EP-02b 已挂账 id 集（热重载增量重挂的差集依据）：Some = 每条规则挂订后
+  // 追加 id；None = 不记账（位级兼容）
+  attached_ids~ : Ref[Array[String]]? = None,
 ) -> Int32 {
   // 按优先级降序排序（高优先级先执行）
   let sorted_rules = rules
@@ -203,6 +206,11 @@ pub fn attach_rules(
         fire(@watch.FsEvent::new(@config.EventType::Interval, "", false, 0, 0))
       })
       subscribed.val = subscribed.val + 1
+    }
+    // EP-02b：记账已挂订 id（热重载增量重挂据此差集）
+    match attached_ids {
+      Some(ids) => ids.val.push(rule.id)
+      None => ()
     }
   }
   subscribed.val
@@ -840,13 +848,14 @@ pub fn dir_covers(outer : String, inner : String) -> Bool {
 
 ///|
 /// 经 EP-01a internal 通道触发规则重载（reload_config op）；结果落 log
-///（可诊断）；op 未注册 → 诊断日志（不抛异常）
+///（可诊断）；op 未注册 → 诊断日志（不抛异常）。
+/// 返回是否热切换成功（EP-02b：增量重挂据此决定是否挂新增 id）。
 pub fn fire_rules_reload(
   registry : @action.InternalRegistry,
   state : WatcherState,
   ev : @watch.FsEvent,
   log : Ref[Array[String]],
-) -> Unit {
+) -> Bool {
   let spec = @config.ActionSpec::new_internal("reload_config", None)
   match registry.lookup("reload_config") {
     Some(handler) => {
@@ -858,10 +867,12 @@ pub fn fire_rules_reload(
         log.val.push("rules_file reload err: " + outcome.stderr)
         println("[reload] ⚠️ " + outcome.stderr)
       }
+      outcome.ok
     }
     None => {
       log.val.push("rules_file reload: internal op reload_config 未注册")
       println("[reload] ⚠️ internal op reload_config 未注册，跳过热重载")
+      false
     }
   }
 }
@@ -884,6 +895,10 @@ pub fn attach_rules_file_reload(
   registry : @action.InternalRegistry,
   window_ms : Int64,
   log : Ref[Array[String]],
+  // EP-02b 热切换钩子：reload 成功后以新规则表回调（daemon 据此对新增 id
+  // 增量重挂订阅，免重启生效）；None = 维持 EP-01d 行为（只切表）
+  //（注意括号：((A) -> Unit)? 是可选闭包；(A) -> Unit? 是返回 Option 的闭包）
+  on_rules_swapped~ : ((Array[@config.Rule]) -> Unit)? = None,
 ) -> Int32 {
   let d = RulesFileDebounce::new()
   let handler = fn(ev : @rx.TriggerEvent[@watch.FsEvent]) {
@@ -901,7 +916,13 @@ pub fn attach_rules_file_reload(
     let _ = @rx.timer(window_ms).subscribe_on_next(fn(_t : Int64) {
       if d.due(@rx.real_now(), window_ms) {
         d.fire()
-        fire_rules_reload(registry, state, fe, log)
+        let ok = fire_rules_reload(registry, state, fe, log)
+        // EP-02b：热切换成功 → 以新规则表回调（timer 回调在总线派发外运行，
+        // 此处挂新订阅安全）
+        match (ok, on_rules_swapped, state.rules_ref) {
+          (true, Some(hook), Some(rr)) => hook(rr.val)
+          _ => ()
+        }
       }
     })
   }
