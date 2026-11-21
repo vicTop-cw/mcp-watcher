@@ -876,7 +876,10 @@ fn validate_config(cfg : Config) -> Result[Config, String] {
     if r.events.length() == 0 {
       errs.push("规则 " + r.id + " 缺少 events")
     }
-    if r.patterns.length() == 0 {
+    // EP-03b：interval-only 规则（全部事件均为 "interval:<ms>"）无文件语义，
+    // 豁免 patterns 要求；混合规则（interval + 文件事件）仍要求 patterns
+    let has_file_event = r.events.iter().any(fn(e) { !e.has_prefix("interval:") })
+    if r.patterns.length() == 0 && has_file_event {
       errs.push("规则 " + r.id + " 缺少 patterns")
     }
     if r.actions.length() == 0 {

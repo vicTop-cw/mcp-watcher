@@ -714,3 +714,23 @@ test "interval_too_small: 报错" {
     Err(err) => assert_true(err.contains("interval 触发间隔过小"))
   }
 }
+
+///|
+/// EP-03b：interval-only 规则（无文件事件）豁免 patterns 要求
+test "interval_only_rule: 无 patterns 放行" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-ivl\",\"events\":[\"interval:60000\"],\"patterns\":[],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"tick\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(cfg) => assert_eq(cfg.rules.length(), 1)
+    Err(_) => assert_true(false)
+  }
+}
+
+///|
+/// EP-03b：混合规则（interval + 文件事件）仍要求 patterns
+test "interval_mixed_rule: 无 patterns 仍报错" {
+  let json = "{\"schema_version\":1,\"watch_id\":\"test-1\",\"watch_dir\":\".\",\"rules\":[{\"id\":\"rule-ivl\",\"events\":[\"interval:60000\",\"modify\"],\"patterns\":[],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"tick\"]}]}]}"
+  match @config.Config::from_json(json) {
+    Ok(_) => assert_true(false)
+    Err(err) => assert_true(err.contains("缺少 patterns"))
+  }
+}
