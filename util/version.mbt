@@ -7,4 +7,4 @@
 
 ///|
 /// 应用版本号（与 moon.mod 的 version 字段保持一致）
-pub const APP_VERSION = "0.2.2"
+pub const APP_VERSION = "0.2.3"
