@@ -879,6 +879,11 @@ async fn cmd_run_once(args : CliArgs) -> Unit {
 
   // 启动监控
   @async.with_task_group(fn(group : @async.TaskGroup) {
+    // EP-02a：真实时钟驱动——缺驱动则 debounce_real/interval 等时间算子
+    // 挂在虚拟时钟上永不触发（与 run_daemon 同款接线，EP-01d 首立）
+    let _ = group.spawn(fn() {
+      @rx.drive_real_clock(CLOCK_DRIVE_INTERVAL_MS)
+    })
     let _ = group.spawn(fn() {
       @watch.spawn_watch_task(
         watch_dir,

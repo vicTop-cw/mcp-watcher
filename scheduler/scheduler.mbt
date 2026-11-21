@@ -24,6 +24,9 @@
 /// MAIN_LOOP_SLEEP_MS：主循环休眠间隔（毫秒）
 const LOG_ROTATE_THRESHOLD = 1000
 const MAIN_LOOP_SLEEP_MS = 1000
+/// 真实时钟驱动间隔（毫秒）：run_scheduler 内 spawn 的 drive_real_clock 周期
+/// （EP-02a；与 cmd/main/main.mbt 同名常量同值，跨包不可见故各自定义）
+const CLOCK_DRIVE_INTERVAL_MS : Int64 = 100L
 /// 热重载订阅数：create.* + modify.* 两条总线订阅
 const RELOAD_SUBSCRIBE_COUNT : Int32 = 2
 
@@ -391,6 +394,11 @@ pub async fn run_scheduler(config : @config.Config) -> Result[String, String] {
   // 启动后台监控任务（rx 订阅同步阻塞，故必须放独立 async 任务）
   // 使用 with_task_group 管理后台任务生命周期
   @async.with_task_group(fn(group : @async.TaskGroup) {
+    // EP-02a：真实时钟驱动——install_real_clock 只注入墙钟，不推进；
+    // 缺驱动则 debounce_real / interval 等时间算子挂在虚拟时钟上永不触发
+    let _ = group.spawn(() => {
+      @rx.drive_real_clock(CLOCK_DRIVE_INTERVAL_MS)
+    })
     let _ = group.spawn(() => {
       @watch.spawn_watch_task(
         config.watch_dir,
