@@ -617,6 +617,44 @@ fn parse_logging_config(v : Json?) -> LoggingConfig {
 }
 
 ///|
+/// 解析索引配置（schema v1.1 可选段；缺省关闭，见 vector-index-design §4.1）
+///
+/// 未知键策略沿用既有 fail-closed：index 段必须是显式声明且类型正确的
+/// 键；畸形/未知键按 schema 校验报错。
+fn parse_index_config(v : Json?) -> IndexConfig {
+  match v {
+    Some(Object(m)) => {
+      let enabled = match jbool(m.get("enabled")) {
+        Some(b) => b
+        None => false
+      }
+      let db_path = match jstr(m.get("db_path")) {
+        Some(d) => d
+        None => ""
+      }
+      let include_list = jstr_array(m.get("include"))
+      let exclude = jstr_array(m.get("exclude"))
+      let embed = match m.get("embed") {
+        Some(Object(em)) => {
+          let en = match jbool(em.get("enabled")) {
+            Some(b) => b
+            None => false
+          }
+          let model = match jstr(em.get("model")) {
+            Some(x) => x
+            None => ""
+          }
+          { enabled: en, model, }
+        }
+        _ => EmbedConfig::new()
+      }
+      { enabled, db_path, include_glob: include_list, exclude, embed, }
+    }
+    _ => IndexConfig::new()
+  }
+}
+
+///|
 /// 检测两个模式数组是否有重叠
 fn has_overlap(patterns1 : Array[String], patterns2 : Array[String]) -> Bool {
   for p1 in patterns1 {
@@ -828,6 +866,7 @@ pub fn Config::from_json(text : String) -> Result[Config, String] {
   let allowed_programs = jstr_array(jget(j, "allowed_programs"))
   let extensions = jstr_array(jget(j, "extensions"))
   let logging = parse_logging_config(jget(j, "logging"))
+  let index = parse_index_config(jget(j, "index"))
   let cfg = {
     schema_version,
     watch_id,
@@ -838,8 +877,23 @@ pub fn Config::from_json(text : String) -> Result[Config, String] {
     allowed_programs,
     extensions,
     logging,
+    index,
   }
   validate_config(cfg)
+}
+
+///|
+/// 大小写不敏感前缀比较（ASCII；仅用于受保护路径前缀判断）
+fn has_prefix_ci(s : String, prefix : String) -> Bool {
+  if s.length() < prefix.length() { return false }
+  for i in 0..<prefix.length() {
+    let sc = s[i].to_int()
+    let pc = prefix[i].to_int()
+    let sl = if sc >= 65 && sc <= 90 { sc + 32 } else { sc }
+    let pl = if pc >= 65 && pc <= 90 { pc + 32 } else { pc }
+    if sl != pl { return false }
+  }
+  true
 }
 
 ///|
@@ -954,6 +1008,19 @@ fn validate_config(cfg : Config) -> Result[Config, String] {
   for c in conflicts {
     warns.push(c)
   }
+  // index 段校验（schema v1.1 可选段；缺省关闭不校验）
+  if cfg.index.enabled {
+    // db_path 显式给出时不得指向系统/受保护目录（其余运行时防御见 index 包防自噬）
+    if cfg.index.db_path != "" {
+      if has_prefix_ci(cfg.index.db_path, "c:/windows") || has_prefix_ci(cfg.index.db_path, "c:\\windows") ||
+        has_prefix_ci(cfg.index.db_path, "c:/program files") || has_prefix_ci(cfg.index.db_path, "c:\\program files") {
+        errs.push("index.db_path 不得指向系统/受保护目录")
+      }
+    }
+    if cfg.index.embed.enabled {
+      warns.push("⚠️ 索引: embed.enabled=true 为 P1 能力，P0 阶段不生效，仍按无向量召回运行")
+    }
+  }
   if errs.length() == 0 {
     // 如果有警告，输出警告信息
     if warns.length() > 0 {
@@ -993,6 +1060,7 @@ pub fn Config::default() -> Config {
     allowed_programs: [],
     extensions: [],
     logging: LoggingConfig::new(),
+    index: IndexConfig::new(),
   }
 }
 
@@ -1012,6 +1080,7 @@ pub fn Config::with_watch_dir(self : Config, dir : String) -> Config {
     allowed_programs: self.allowed_programs,
     extensions: self.extensions,
     logging: self.logging,
+    index: self.index,
   }
 }
 
@@ -1028,6 +1097,7 @@ pub fn Config::with_debounce_ms(self : Config, ms : Int32) -> Config {
     allowed_programs: self.allowed_programs,
     extensions: self.extensions,
     logging: self.logging,
+    index: self.index,
   }
 }
 

@@ -24,20 +24,22 @@ mcp-watcher 不是"通用的文件监控触发器"，而是带**产物生命周�
 ### 2.1 环境要求
 
 - MoonBit 工具链（本项目实测版本：`0.1.20261104`）
-- 依赖：`vicTop-cw/RX-MBT@0.4.6`、`moonbitlang/async@0.22.9`（构建时自动拉取，见 `moon.mod`）
+- 依赖：`vicTop-cw/RX-MBT@0.4.6`、`moonbitlang/async@0.22.9`、`moonbitlang/x@0.5.5`（构建时自动拉取，见 `moon.mod`）
 
 ### 2.2 构建
 
 ```bash
-cd E:\IDEProjects\AI\mcp-watcher   # 或你的 clone 目录
+cd <mcp-watcher 仓库根目录>   # 替换为你的 clone 路径
 moon build --target native
 ```
 
-产物路径：
+产物路径（单仓库独立构建）：
 
 ```
 _build/native/debug/build/cmd/main/main.exe
 ```
+
+> 若仓库处于 moon workspace（如 `E:\IDEProjects\AI\moon.work`）内构建，`_build/` 会落在 workspace 根目录下，实际产物为 `<workspace根>/_build/native/debug/build/cmd/main/main.exe`。
 
 也可直接通过 moon 运行：
 

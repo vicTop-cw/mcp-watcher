@@ -114,6 +114,7 @@ test "allowed_programs：返回显式白名单，不从 argv 自动收集" {
     allowed_programs: ["git", "node"],
     logging: quiet_logging(),
     extensions: [],
+    index: @config.IndexConfig::new(),
   }
   let progs = @scheduler.allowed_programs(cfg)
   // 必须是配置里显式声明的 git/node，而非规则 argv 里的 cmd
@@ -136,6 +137,7 @@ test "allowed_programs：空白名单 = 不执行任何命令（安全默认）"
     allowed_programs: [],
     logging: quiet_logging(),
     extensions: [],
+    index: @config.IndexConfig::new(),
   }
   assert_eq(@scheduler.allowed_programs(cfg).length(), 0)
 }

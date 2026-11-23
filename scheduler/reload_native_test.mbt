@@ -46,7 +46,7 @@ test "验收: 规则文件 1→2 规则 → internal 通道 reload → 规则表
   let log : Ref[Array[String]] = Ref::Ref([])
 
   // 1) 首次触发：解析文件（1 规则）→ 热切换
-  @scheduler.fire_rules_reload(reg, state, ep01d_ev(tmp), log)
+  let _ = @scheduler.fire_rules_reload(reg, state, ep01d_ev(tmp), log)
   assert_eq(rules_ref.val.length(), 1)
   assert_eq(rules_ref.val[0].id, "r1")
   assert_true(log.val[0].contains("ok"))
@@ -59,7 +59,7 @@ test "验收: 规则文件 1→2 规则 → internal 通道 reload → 规则表
     Err(_) => assert_true(false)
     Ok(_) => ()
   }
-  @scheduler.fire_rules_reload(reg, state, ep01d_ev(tmp), log)
+  let _ = @scheduler.fire_rules_reload(reg, state, ep01d_ev(tmp), log)
   assert_eq(rules_ref.val.length(), 2)
   assert_eq(rules_ref.val[1].id, "r2")
   assert_true(log.val[1].contains("ok"))
@@ -69,7 +69,7 @@ test "验收: 规则文件 1→2 规则 → internal 通道 reload → 规则表
     Err(_) => assert_true(false)
     Ok(_) => ()
   }
-  @scheduler.fire_rules_reload(reg, state, ep01d_ev(tmp), log)
+  let _ = @scheduler.fire_rules_reload(reg, state, ep01d_ev(tmp), log)
   assert_eq(rules_ref.val.length(), 2)
   assert_eq(rules_ref.val[1].id, "r2")
   assert_true(log.val[2].contains("err"))

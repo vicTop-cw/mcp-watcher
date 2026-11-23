@@ -39,6 +39,27 @@ pub(all) struct CliArgs {
   debounce_ms : Int64
   /// 前台单次运行模式
   once : Bool
+  // ── search 子命令参数（vector-index-design §6）──
+  /// 检索关键词（FTS5 + path LIKE 兜底）
+  keyword : String
+  /// 节点类型过滤："file" / "dir" / "" 不限
+  type_filter : String
+  /// 扩展名过滤（小写不含点）
+  ext_filter : String
+  /// 最小 size（字节）
+  min_size : Int64
+  /// 最大 size（字节，0 = 不限）
+  max_size : Int64
+  /// mtime 下限（Unix 秒，0 = 不限）
+  mtime_after : Int64
+  /// mtime 上限（Unix 秒，0 = 不限）
+  mtime_before : Int64
+  /// 结果上限（默认 100）
+  limit : Int
+  /// 输出格式："text" / "jsonl"
+  format : String
+  /// 显式索引库路径（缺省从配置读取）
+  db : String
 }
 
 ///|
@@ -59,6 +80,16 @@ pub fn CliArgs::new() -> CliArgs {
     stop_after: NO_OVERRIDE,
     debounce_ms: NO_OVERRIDE,
     once: false,
+    keyword: "",
+    type_filter: "",
+    ext_filter: "",
+    min_size: 0L,
+    max_size: 0L,
+    mtime_after: 0L,
+    mtime_before: 0L,
+    limit: 100,
+    format: "text",
+    db: "",
   }
 }
 
@@ -70,7 +101,7 @@ pub fn parse_args(argv : Array[String]) -> CliArgs {
   // 子命令在 args[1]；js 的 args 是完整 process.argv（[node, 脚本, 子命令, ...]），
   // 子命令在 args[2]。兼容三种布局：扫描「首个已知子命令」，其后全部按旗标解析。
   let known : Array[String] = [
-    "validate", "run", "status", "stop", "start", "reload", "help",
+    "validate", "run", "status", "stop", "start", "reload", "search", "help",
   ]
   let start = Ref::Ref(-1)
   let mut cmd = "help"
@@ -89,6 +120,16 @@ pub fn parse_args(argv : Array[String]) -> CliArgs {
   let mut stop_after = out.stop_after
   let mut debounce_ms = out.debounce_ms
   let mut once = false
+  let mut keyword = out.keyword
+  let mut type_filter = out.type_filter
+  let mut ext_filter = out.ext_filter
+  let mut min_size = out.min_size
+  let mut max_size = out.max_size
+  let mut mtime_after = out.mtime_after
+  let mut mtime_before = out.mtime_before
+  let mut limit = out.limit
+  let mut format = out.format
+  let mut db = out.db
   let i = Ref::Ref(start.val + 1)
   while i.val < argv.length() {
     let a = argv[i.val]
@@ -113,11 +154,60 @@ pub fn parse_args(argv : Array[String]) -> CliArgs {
     } else if a == "--once" {
       once = true
       i.val = i.val + 1
+    } else if a == "--keyword" && i.val + 1 < argv.length() {
+      keyword = argv[i.val + 1]
+      i.val = i.val + 2
+    } else if a == "--type" && i.val + 1 < argv.length() {
+      type_filter = argv[i.val + 1]
+      i.val = i.val + 2
+    } else if a == "--ext" && i.val + 1 < argv.length() {
+      ext_filter = argv[i.val + 1]
+      i.val = i.val + 2
+    } else if a == "--min-size" && i.val + 1 < argv.length() {
+      min_size = @string.parse_int64(argv[i.val + 1]) catch { _ => min_size }
+      i.val = i.val + 2
+    } else if a == "--max-size" && i.val + 1 < argv.length() {
+      max_size = @string.parse_int64(argv[i.val + 1]) catch { _ => max_size }
+      i.val = i.val + 2
+    } else if a == "--mtime-after" && i.val + 1 < argv.length() {
+      mtime_after = @string.parse_int64(argv[i.val + 1]) catch { _ => mtime_after }
+      i.val = i.val + 2
+    } else if a == "--mtime-before" && i.val + 1 < argv.length() {
+      mtime_before = @string.parse_int64(argv[i.val + 1]) catch { _ => mtime_before }
+      i.val = i.val + 2
+    } else if a == "--limit" && i.val + 1 < argv.length() {
+      limit = @string.parse_int(argv[i.val + 1]) catch { _ => limit }
+      i.val = i.val + 2
+    } else if a == "--format" && i.val + 1 < argv.length() {
+      format = argv[i.val + 1]
+      i.val = i.val + 2
+    } else if a == "--db" && i.val + 1 < argv.length() {
+      db = argv[i.val + 1]
+      i.val = i.val + 2
     } else {
       i.val = i.val + 1
     }
   }
-  { command, rules, watch_dir, results, ready, stop_after, debounce_ms, once, }
+  {
+    command,
+    rules,
+    watch_dir,
+    results,
+    ready,
+    stop_after,
+    debounce_ms,
+    once,
+    keyword,
+    type_filter,
+    ext_filter,
+    min_size,
+    max_size,
+    mtime_after,
+    mtime_before,
+    limit,
+    format,
+    db,
+  }
 }
 
 ///|
@@ -319,6 +409,33 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
   )
   println("  rules_file 热重载订阅：" + nrl.to_string())
 
+  // ═══ index 索引（vector-index-design §5）：P0 阶段可选能力 ═══
+  // 启动顺序（§5.2 防丢事件）：先全量 walk 建库（含断点/增量校验），
+  // 完成后再订阅事件流做增量 upsert/delete；建库失败 → 旁路降级，不
+  // 影响既有规则行为（缺省 index.enabled=false，等价现状）。
+  let index_handle : Ref[@index.IndexHandle?] = Ref::Ref(None)
+  if cfg.index.enabled {
+    match @index.open_index(cfg.watch_dir, cfg.index, false) {
+      Err(e) => {
+        println("  [index] 建库失败（旁路降级，不影响规则监控）：" + e)
+      }
+      Ok(h) => {
+        index_handle.val = Some(h)
+        for l in @index.status_lines(h) {
+          println("  " + l)
+        }
+        // 建库完成后再挂增量订阅，防丢事件（§5.2）
+        let _ = bus.subscribe("*.*", fn(ev : @rx.TriggerEvent[@watch.FsEvent]) {
+          match index_handle.val {
+            None => ()
+            Some(h2) => @index.apply_event(h2, ev.payload)
+          }
+        })
+        println("  [index] 事件增量订阅已挂载")
+      }
+    }
+  }
+
   // 创建就绪哨兵文件（test-mode）
   if args.ready != "" {
     match write_file(args.ready, "") {
@@ -365,24 +482,21 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
     let _ = group.spawn(fn() {
       @rx.drive_real_clock(CLOCK_DRIVE_INTERVAL_MS)
     })
-    // 规则文件可能在 watch_dir 之外：目录未被主监控覆盖时补一个监控
-    // （仅顶层；事件进同一 bus，由路径匹配过滤）
+    // ⚠️ 方案 B（vector-index-design §2）：规则文件目录 + watch_dir 合并为
+    // **单个监控任务**。rx 的 watch 订阅是同步阻塞轮询（Sleep() 永不
+    // yield），MoonBit 协作式 async 下多 watch 任务会互相饿死（双 watch
+    // 缺陷根因），故只允许一个监控任务；多根目录由公共祖先 + 事件路径
+    // 过滤实现等价闭环（watch 包 spawn_watch_task_multi）。
+    let roots : Array[String] = []
+    roots.push(cfg.watch_dir)
     let rules_dir = @scheduler.rules_file_dir(args.rules)
     if !@scheduler.dir_covers(cfg.watch_dir, rules_dir) {
-      let _ = group.spawn(fn() {
-        @watch.spawn_watch_task(
-          rules_dir, false, bus,
-          debounce_ms=cfg.debounce_ms.to_int64(),
-          paused=state.paused,
-        )
-      })
-      println("  规则文件在主监控目录外，已补监控：" + rules_dir)
+      roots.push(rules_dir)
+      println("  规则文件在主监控目录外，已并入监控根：" + rules_dir)
     }
     let _ = group.spawn(fn() {
-      @watch.spawn_watch_task(
-        cfg.watch_dir,
-        cfg.recursive,
-        bus,
+      @watch.spawn_watch_task_multi(
+        roots, cfg.recursive, bus,
         debounce_ms=cfg.debounce_ms.to_int64(),
         paused=state.paused,
       )
@@ -503,6 +617,14 @@ async fn main {
         ()
       }
     }
+    "search" => {
+      let code = cmd_search(args)
+      if code == EXIT_SUCCESS {
+        ()
+      } else {
+        ()
+      }
+    }
     _ => cmd_help()
   }
 }
@@ -532,6 +654,11 @@ fn cmd_help() -> Unit {
   println("  mcp-watcher status")
   println("  mcp-watcher reload --rules <FILE>")
   println("  mcp-watcher stop")
+  println("  mcp-watcher search <watch_dir> [--keyword <kw>] [--type file|dir]")
+  println("              [--ext <ext>] [--min-size <bytes>] [--max-size <bytes>]")
+  println("              [--mtime-after <ts>] [--mtime-before <ts>]")
+  println("              [--limit <n>] [--format text|jsonl] [--db <path>]")
+  println("    （索引检索：需配置 index.enabled=true 且服务已建库；退出码 0/1/2）")
   println("")
   println(
     "run 的 test-mode 参数（对齐 tests/harness/server_contract.md）：",
@@ -781,6 +908,141 @@ fn cmd_reload(args : CliArgs) -> Int32 {
     return EXIT_FAILURE
   }
 }
+
+///|
+/// search 子命令：只读查询索引库（vector-index-design §6）
+///
+/// 用法：mcp-watch search <watch_dir> [--keyword <kw>] [--type file|dir]
+///              [--ext <ext>] [--min-size <bytes>] [--max-size <bytes>]
+///              [--mtime-after <ts>] [--mtime-before <ts>]
+///              [--limit <n>] [--format text|jsonl] [--db <path>]
+/// 退出码：
+///   0 - 查询成功（可无命中）
+///   1 - 参数错误 / 配置校验失败
+///   2 - 索引未启用 / 库不存在 / 库损坏（提示 --rebuild-index）
+fn cmd_search(args : CliArgs) -> Int32 {
+  // 1. watch_dir 为位置参数，必填
+  let watch_dir = args.watch_dir
+  if watch_dir == "" {
+    println("✗ search 缺少 watch_dir 位置参数")
+    println("  用法：mcp-watch search <watch_dir> [--keyword <kw>] ...")
+    return EXIT_FAILURE
+  }
+  // 2. 读取配置（<watch_dir>/.mcp-watch.json）
+  let rules_file = watch_dir + "/" + DEFAULT_RULES_FILE
+  let text = read_file(rules_file)
+  let cfg = match text {
+    Err(e) => {
+      println("✗ 读取配置失败：" + rules_file + "（" + e + "）")
+      return EXIT_FAILURE
+    }
+    Ok(content) =>
+      match @config.Config::from_json(content) {
+        Err(e) => {
+          println("✗ 配置校验失败：\n" + e)
+          return EXIT_FAILURE
+        }
+        Ok(c) => c
+      }
+  }
+  // 3. 校验 index.enabled
+  if not cfg.index.enabled {
+    println("✗ 索引未启用，请在配置中开启 index.enabled 并启动服务")
+    return EXIT_INDEX_DISABLED
+  }
+  // 4. 定位索引库：--db 显式 > 配置 db_path > <watch_dir>/.mcp-watch-index.db
+  let db_path = if args.db != "" {
+    args.db
+  } else {
+    @index.resolve_db_path(watch_dir, cfg.index)
+  }
+  if not file_exists(db_path) {
+    println("✗ 索引库不存在：" + db_path)
+    println("  请先启动服务建库，或执行 --rebuild-index（重建入口 P0 后置）")
+    return EXIT_INDEX_DISABLED
+  }
+  // 5. 打开索引（存在库时增量校验，walk 未完成会自动补全）
+  match @index.open_index(watch_dir, cfg.index, false) {
+    Err(e) => {
+      println("✗ 索引库不可用：" + e)
+      println("  提示：库损坏时删除库文件后重新启动服务建库")
+      return EXIT_INDEX_DISABLED
+    }
+    Ok(h) => {
+      // 6. 构造查询条件（全部 AND 组合）
+      let opts = {
+        keyword: args.keyword,
+        node_type: args.type_filter,
+        ext: args.ext_filter,
+        min_size: args.min_size,
+        max_size: args.max_size,
+        mtime_after: args.mtime_after,
+        mtime_before: args.mtime_before,
+        limit: args.limit,
+      } : @index.SearchOptions
+      let nodes = @index.search(h.db, opts)
+      // 7. 输出
+      if args.format == "jsonl" {
+        for n in nodes {
+          print_node_jsonl(n)
+        }
+      } else {
+        print_search_table(nodes)
+      }
+      println("  命中：" + nodes.length().to_string() + " 条")
+      let _ = @index.close(h)
+      return EXIT_SUCCESS
+    }
+  }
+}
+
+///|
+/// text 格式：对齐表格（path / type / size / mtime / ext）
+fn print_search_table(nodes : Array[@index.Node]) -> Unit {
+  for n in nodes {
+    let t = n.node_type
+    let sz = n.size.to_string()
+    let mt = n.mtime.to_string()
+    let ex = if n.ext == "" { "-" } else { n.ext }
+    let p = truncate_path(n.path, 80)
+    println(p + " | " + t + " | " + sz + " | " + mt + " | " + ex)
+  }
+}
+
+///|
+/// jsonl 格式：每行完整节点 JSON（含 rel_path/parent/depth）
+fn print_node_jsonl(n : @index.Node) -> Unit {
+  let parent = match n.parent {
+    None => @json.Json::null()
+    Some(p) => @json.Json::string(p)
+  }
+  let obj = @json.Json::object({
+    "path": @json.Json::string(n.path),
+    "rel_path": @json.Json::string(n.rel_path),
+    "parent": parent,
+    "depth": @json.Json::number(n.depth.to_double()),
+    "type": @json.Json::string(n.node_type),
+    "size": @json.Json::number(n.size.to_double()),
+    "mtime": @json.Json::number(n.mtime.to_double()),
+    "ctime": @json.Json::number(n.ctime.to_double()),
+    "ext": @json.Json::string(n.ext),
+  })
+  println(@json.Json::stringify(obj))
+}
+
+///|
+/// 截断超长路径（text 表格用）
+fn truncate_path(p : String, max : Int) -> String {
+  if p.length() <= max {
+    p
+  } else {
+    p.substring(start=0, end=max - 3) + "..."
+  }
+}
+
+///|
+/// search 专用退出码（§6.3）
+const EXIT_INDEX_DISABLED = 2
 
 ///|
 /// run 子命令：后台自治运行

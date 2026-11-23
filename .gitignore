@@ -1,19 +1,15 @@
-# moon 构建产物（moon 自动生成，不入库）
-_build/
+# moon 鏋勫缓浜х墿锛坢oon 鑷姩鐢熸垚锛屼笉鍏ュ簱锛?_build/
 pkg.generated.mbti
 
-# 运行时状态
-fist-mbt.db
+# 杩愯鏃剁姸鎬?fist-mbt.db
 temp/
 output/
 
-# 工具 / agent 状态
-.arts/
+# 宸ュ叿 / agent 鐘舵€?.arts/
 .codeartsdoer/
 .workbuddy/
 
-# 测试运行时产物
-tests/harness/.results.jsonl
+# 娴嬭瘯杩愯鏃朵骇鐗?tests/harness/.results.jsonl
 tests/harness/.watch/
 tests/harness/.ready
 tests/probe/.tmp_r2/
@@ -22,3 +18,18 @@ __pycache__/
 *.pyc
 *.log
 .atomcode/
+
+# 项目申报书，不入库
+项目申报书.md
+
+# 运行/测试临时产物（PID、输出、备份）
+.pid_check.txt
+.pid_test_native.txt
+check_*.txt
+test_native_*.txt
+moon.mod.bak
+
+# 工具状态 / 运行库 / 测试产物（落实为有效规则）
+.arts/
+fist-mbt.db
+tests/harness/.results.jsonl

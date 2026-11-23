@@ -4,6 +4,7 @@ import {
   "vicTop-cw/mcp-watcher/scheduler",
   "vicTop-cw/mcp-watcher/action",
   "vicTop-cw/mcp-watcher/util",
+  "vicTop-cw/mcp-watcher/index",
   "vicTop-cw/RX-MBT/rx",
   "vicTop-cw/RX-MBT/monitor" @mon,
   "vicTop-cw/RX-MBT/rhop_task" @rt,
@@ -16,6 +17,10 @@ import {
 }
 
 pkgtype(kind: "executable")
+
+// 依赖 index（native-only SQLite FFI）与 RX-MBT 原生监控，可执行文件仅
+// native 目标可构建；js/wasm 目标由各库包测试覆盖，cmd 不参与。
+supported_targets = "native"
 
 options(
   "allow-experimental-packages": [ "moonbitlang/core/async" ],

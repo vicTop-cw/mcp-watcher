@@ -546,6 +546,69 @@ pub fn LoggingConfig::new() -> LoggingConfig {
 }
 
 ///|
+/// 索引 embedding 配置（P1 扩展位；P0 仅解析不生效，见 vector-index-design §4.1）
+#derive(Eq, Debug)
+pub(all) struct EmbedConfig {
+  /// 是否启用向量召回（P0 恒 false）
+  enabled : Bool
+  /// 嵌入模型名（P0 保留空串）
+  model : String
+}
+
+///|
+pub extend EmbedConfig with Eq::{not_equal, equal}
+
+///|
+pub extend EmbedConfig with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+/// 构造 embedding 配置（P0 恒禁用）
+pub fn EmbedConfig::new() -> EmbedConfig {
+  { enabled: false, model: "", }
+}
+
+///|
+/// 索引配置（schema v1.1 可选段；缺省关闭，等价 v1.0 行为，见 vector-index-design §4）
+///
+/// 字段契约（§4.1）：
+///   - enabled：false 时其余字段忽略，加载路径走既有逻辑（不初始化 SQLite）
+///   - db_path：SQLite 库绝对路径；空 = "<watch_dir>/.mcp-watch-index.db"
+///   - include：glob 白名单；空 = 不限
+///   - exclude：glob 黑名单；与内置排除取并集
+///   - embed：P1 扩展位，P0 仅解析不生效
+#derive(Eq, Debug)
+pub(all) struct IndexConfig {
+  /// 是否启用索引（默认 false）
+  enabled : Bool
+  /// SQLite 库绝对路径（默认 "<watch_dir>/.mcp-watch-index.db"）
+  db_path : String
+  /// glob 白名单（JSON 键 "include"；字段名 include_glob 规避保留字，空 = 不限）
+  include_glob : Array[String]
+  /// glob 黑名单（与内置排除取并集）
+  exclude : Array[String]
+  /// embedding 配置（P1）
+  embed : EmbedConfig
+}
+
+///|
+pub extend IndexConfig with Eq::{not_equal, equal}
+
+///|
+pub extend IndexConfig with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+/// 构造索引配置（缺省关闭）
+pub fn IndexConfig::new() -> IndexConfig {
+  {
+    enabled: false,
+    db_path: "",
+    include_glob: [],
+    exclude: [],
+    embed: EmbedConfig::new(),
+  }
+}
+
+///|
 /// 顶层配置（对应一份 .mcp-watch.json）
 #derive(Eq, Debug)
 pub(all) struct Config {
@@ -571,6 +634,8 @@ pub(all) struct Config {
   extensions : Array[String]
   /// 日志配置
   logging : LoggingConfig
+  /// 索引配置（schema v1.1 可选段；缺省关闭）
+  index : IndexConfig
 }
 
 ///|

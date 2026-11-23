@@ -7,4 +7,5 @@ license = "Apache-2.0"
 import {
   "vicTop-cw/RX-MBT@0.4.6",
   "moonbitlang/async@0.22.9",
+  "moonbitlang/x@0.5.5",
 }
