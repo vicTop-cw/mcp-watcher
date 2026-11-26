@@ -75,17 +75,31 @@ test "debounce: window=0 → 当拍即触发" {
 
 ///|
 test "event 匹配: 精确 / 双向分段后缀 / 反斜杠归一" {
-  assert_true(@scheduler.rules_file_event_match("a/b/rules.json", "a/b/rules.json"))
-  assert_true(@scheduler.rules_file_event_match("/abs/a/b/rules.json", "a/b/rules.json"))
-  assert_true(@scheduler.rules_file_event_match("a/b/rules.json", "/abs/a/b/rules.json"))
-  assert_true(@scheduler.rules_file_event_match("a\\b\\rules.json", "a/b/rules.json"))
+  assert_true(
+    @scheduler.rules_file_event_match("a/b/rules.json", "a/b/rules.json"),
+  )
+  assert_true(
+    @scheduler.rules_file_event_match("/abs/a/b/rules.json", "a/b/rules.json"),
+  )
+  assert_true(
+    @scheduler.rules_file_event_match("a/b/rules.json", "/abs/a/b/rules.json"),
+  )
+  assert_true(
+    @scheduler.rules_file_event_match("a\\b\\rules.json", "a/b/rules.json"),
+  )
 }
 
 ///|
 test "event 匹配: 异文件 / 前缀相似名不假阳" {
-  assert_true(!@scheduler.rules_file_event_match("a/b/other.json", "a/b/rules.json"))
-  assert_true(!@scheduler.rules_file_event_match("a/b/rules.json2", "a/b/rules.json"))
-  assert_true(!@scheduler.rules_file_event_match("a/b/rules.json", "a/b/rules.json2"))
+  assert_true(
+    !@scheduler.rules_file_event_match("a/b/other.json", "a/b/rules.json"),
+  )
+  assert_true(
+    !@scheduler.rules_file_event_match("a/b/rules.json2", "a/b/rules.json"),
+  )
+  assert_true(
+    !@scheduler.rules_file_event_match("a/b/rules.json", "a/b/rules.json2"),
+  )
 }
 
 ///|
@@ -131,19 +145,19 @@ test "dir_covers: 相等 / 父子覆盖；前缀相似不假阳" {
 ///|
 fn mk_stub_registry(ok~ : Bool = true) -> @action.InternalRegistry {
   let reg = @action.InternalRegistry::new()
-  @action.InternalRegistry::register(
-    reg,
-    "reload_config",
-    fn(_s : @config.ActionSpec, _e : @watch.FsEvent, _d : String) {
-      if ok {
-        @action.ActionOutcome::new("internal", true, 0, "reload ok rules=2", "")
-      } else {
-        @action.ActionOutcome::new(
-          "internal", false, -1, "", "热重载失败: parse error",
-        )
-      }
-    },
-  )
+  @action.InternalRegistry::register(reg, "reload_config", fn(
+    _s : @config.ActionSpec,
+    _e : @watch.FsEvent,
+    _d : String,
+  ) {
+    if ok {
+      @action.ActionOutcome::new("internal", true, 0, "reload ok rules=2", "")
+    } else {
+      @action.ActionOutcome::new(
+        "internal", false, -1, "", "热重载失败: parse error",
+      )
+    }
+  })
   reg
 }
 
@@ -203,14 +217,14 @@ fn e2e_setup() -> (
 ) {
   let calls = Ref::Ref([])
   let reg = @action.InternalRegistry::new()
-  @action.InternalRegistry::register(
-    reg,
-    "reload_config",
-    fn(_s : @config.ActionSpec, e : @watch.FsEvent, _d : String) {
-      calls.val.push(e.path)
-      @action.ActionOutcome::new("internal", true, 0, "reloaded", "")
-    },
-  )
+  @action.InternalRegistry::register(reg, "reload_config", fn(
+    _s : @config.ActionSpec,
+    e : @watch.FsEvent,
+    _d : String,
+  ) {
+    calls.val.push(e.path)
+    @action.ActionOutcome::new("internal", true, 0, "reloaded", "")
+  })
   let state = @scheduler.WatcherState::new("rules.json", "w", ".")
   let bus : @rx.EventBus[@watch.FsEvent] = @rx.EventBus::new()
   let log : Ref[Array[String]] = Ref::Ref([])

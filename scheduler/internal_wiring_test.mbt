@@ -10,7 +10,11 @@
 // ============================================================================
 
 ///|
-fn mk_internal_rule(id : String, op : String, message : String?) -> @config.Rule {
+fn mk_internal_rule(
+  id : String,
+  op : String,
+  message : String?,
+) -> @config.Rule {
   let a = @config.ActionSpec::new_internal(op, message)
   @config.Rule::new(id, ["create"], ["*.tmp"], [], None, [a], false, 0, None)
 }
@@ -33,8 +37,7 @@ fn quiet_sch() -> @config.LoggingConfig {
 test "e2e: internal reload_config 成功（stdout 带真实规则数）" {
   @rx.install_real_clock()
   let tmp_rules = "tests/harness/.ep01a-reload.json"
-  let rules_json =
-    "{\"schema_version\":1,\"watch_id\":\"ep01a\",\"watch_dir\":\".\",\"rules\":[" +
+  let rules_json = "{\"schema_version\":1,\"watch_id\":\"ep01a\",\"watch_dir\":\".\",\"rules\":[" +
     "{\"id\":\"r1\",\"events\":[\"create\"],\"patterns\":[\"*.tmp\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"a\"]}]}, " +
     "{\"id\":\"r2\",\"events\":[\"modify\"],\"patterns\":[\"*.log\"],\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"b\"]}]}]}"
   match @mon.fs_write_atomic(tmp_rules, rules_json) {
@@ -72,9 +75,7 @@ test "e2e: internal reload_config 成功（stdout 带真实规则数）" {
 test "e2e: internal reload_config 失败（文件不存在，可诊断且退出码 -1）" {
   @rx.install_real_clock()
   let state = @scheduler.WatcherState::new(
-    "no-such-ep01a-file.json",
-    "ep01a",
-    "C:/tmp",
+    "no-such-ep01a-file.json", "ep01a", "C:/tmp",
   )
   let reg = @scheduler.build_internal_registry(state)
   let bus : @rx.EventBus[@watch.FsEvent] = @rx.EventBus::new()
@@ -171,11 +172,13 @@ test "e2e: internal log_event 落 LifecycleEvent（message 占位符已展开）
   let log : Ref[Array[String]] = Ref::Ref([])
   let records : Ref[Array[@scheduler.ExecRecord]] = Ref::Ref([])
   let _ = @scheduler.attach_rules(
-    [mk_internal_rule(
-      "ep01a-log",
-      "log_event",
-      Some("hit {file.name} {event.type}"),
-    )],
+    [
+      mk_internal_rule(
+        "ep01a-log",
+        "log_event",
+        Some("hit {file.name} {event.type}"),
+      ),
+    ],
     bus,
     @action.build_policy([]),
     "C:/tmp",

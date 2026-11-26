@@ -518,20 +518,93 @@ pub fn ProductTracker::expired_records(
 }
 
 ///|
-/// 检查并清理过期产物（P3 方案 B：TTL 语义做实 + 诚实降级）
+/// 产物生命周期事件总线类型别名（rx 泛型跨包引用必须带完整类型标注）
+pub type LifecycleBus = @rx.EventBus[LifecycleEvent]
+
+///|
+/// 新建空的产物生命周期事件总线（守护进程持有，规则侧与清扫任务共享）
+pub fn new_lifecycle_bus() -> LifecycleBus {
+  @rx.EventBus::new()
+}
+
+///|
+/// 按动作规格登记产物 TTL（P3 生命周期追踪入口）
 ///
-/// 行为：
-///   1. 计算到期产物，发出结构化的 `product.expired` 生命周期事件（println 可诊断）；
-///   2. 从追踪表移除到期记录，返回剩余 tracker；
-///   3. **不删文件、不移动文件**——trash 依赖 rx native 缺失的 mkdir/rename API，
-///      已诚实降级为"规划中"（见 workbuddy/plan/p3-feasibility.md）。
-///      到期只表示"逻辑生命周期结束"，物理回收留待 rx fs API 补齐。
+/// 语义：仅当 `ttl > 0` 且 `cleanup != "none"` 时登记；`ttl <= 0` 表示永久
+/// 产物，不参与到期清理（与 register / expired_records 一致口径）。
+/// 返回更新后的追踪器。
+pub fn ProductTracker::register_spec(
+  tracker : ProductTracker,
+  path : String,
+  spec : @config.ActionSpec,
+) -> ProductTracker {
+  if spec.ttl <= 0 || spec.cleanup == "none" {
+    return tracker
+  }
+  tracker.register(path, spec.ttl)
+}
+
+///|
+/// 发出 `product.created` 生命周期事件（产物创建时调用）
+pub fn emit_created(bus : LifecycleBus?, path : String) -> Unit {
+  let ev = LifecycleEvent::new(@config.LifecycleEventType::Created, path)
+  match bus {
+    Some(b) => b.publish(ev.event_name(), ev)
+    None => ()
+  }
+}
+
+///|
+/// 发布生命周期事件到给定 EventBus（事件名 = `product.<type>`）。
 ///
-/// 返回：(到期数量, 剩余追踪器)
+/// 无总线（None）时退化为本地累加器 + 可诊断日志，保证三目标单测可跑。
+fn publish_lifecycle(
+  bus : @rx.EventBus[LifecycleEvent]?,
+  events : Ref[Array[LifecycleEvent]],
+  kind : @config.LifecycleEventType,
+  path : String,
+  message : String,
+) -> Unit {
+  let ev = if message == "" {
+    LifecycleEvent::new(kind, path)
+  } else {
+    LifecycleEvent::new_with_message(kind, path, message)
+  }
+  // at~ 缺省取真实墙钟（daemon 侧 install_real_clock；测试侧为虚拟时钟）
+  match bus {
+    Some(b) => b.publish(ev.event_name(), ev)
+    None => ()
+  }
+  events.val.push(ev)
+  println(
+    "[lifecycle] " + ev.event_name() + " path=" + ev.path +
+    (if message == "" { "" } else { " msg=" + message }),
+  )
+}
+
+///|
+/// 检查并清理过期产物（P3：TTL 到期 → 生命周期事件 → trash 物理回收）
+///
+/// 行为（按序）：
+///   1. 计算到期产物（`now - created >= ttl*1e9`，边界 age==ttl 视为到期）；
+///   2. 对每个到期产物发 `product.expired`（先事件后回收，保证可观测）；
+///   3. 调 `trash_file` 移入 `<watch_dir>/.mcp-watcher-trash/<时间戳>/<name>`：
+///      成功 → 追加 `product.destroyed` 事件（含回收桶路径）；
+///      失败 → 记录回收错误、**保留原文件**，不谎报销毁；
+///   4. 从追踪表移除到期记录，返回剩余 tracker。
+///
+/// 参数：
+///   watch_dir - 回收站根（`<watch_dir>/.mcp-watcher-trash`）
+///   bus       - 生命周期事件总线（None = 只落本地累加器 + 日志）
+///   events    - 本地生命周期事件累加器（测试断言 / 无总线时诊断）
+///
+/// 返回：(到期数量, 剩余追踪器, 本次到期记录)
 pub fn ProductTracker::cleanup_expired(
   tracker : ProductTracker,
-  _watch_dir : String,
-) -> (Int32, ProductTracker) {
+  watch_dir : String,
+  bus~ : @rx.EventBus[LifecycleEvent]? = None,
+  events~ : Ref[Array[LifecycleEvent]] = Ref::Ref([]),
+) -> (Int32, ProductTracker, Array[ProductRecord]) {
   let now_ns = Int64::from_int(@rx.real_now().to_int())
   let expired = tracker.expired_records(now_ns)
   let remaining : Array[ProductRecord] = []
@@ -541,23 +614,62 @@ pub fn ProductTracker::cleanup_expired(
       remaining.push(record)
     }
   }
-  // 发出可诊断的生命周期事件（不再静默 no-op）
   for record in expired {
-    let ev = LifecycleEvent::new(
+    publish_lifecycle(
+      bus,
+      events,
       @config.LifecycleEventType::Expired,
       record.path,
-    )
-    println(
-      "[lifecycle] " +
-      ev.event_name() +
-      " path=" +
-      ev.path +
-      " ttl=" +
-      record.ttl_seconds.to_string() +
-      "s（逻辑过期；物理回收待 rx fs API）",
+      "ttl=" + record.ttl_seconds.to_string() + "s",
     )
   }
-  (expired.length(), { records: remaining, })
+  (expired.length(), { records: remaining, }, expired)
+}
+
+///|
+/// TTL 到期清扫：逻辑过期事件 → trash 物理回收 → product.destroyed 事件
+///
+/// 这是 P3「TTL 到期清理进 trash（可恢复）」的完整闭环（异步，因 trash 走
+/// `@fs`）。流程见 `cleanup_expired`；本函数额外：
+///   - 对每个到期产物调 `trash_file(path, watch_dir)`；
+///   - 回收成功 → 发 `product.destroyed`（消息带时间戳桶路径）；
+///   - 回收失败 → **保留原文件**，只记可诊断错误日志（不谎报销毁、不吞错）。
+///
+/// 返回：(到期数量, 剩余追踪器)；其中到期记录已由 `expired_records` 语义确定。
+pub async fn ProductTracker::sweep_expired_to_trash(
+  tracker : ProductTracker,
+  watch_dir : String,
+  bus~ : @rx.EventBus[LifecycleEvent]? = None,
+  events~ : Ref[Array[LifecycleEvent]] = Ref::Ref([]),
+) -> (Int32, ProductTracker) {
+  let (count, remaining, expired) = tracker.cleanup_expired(
+    watch_dir,
+    bus~,
+    events~,
+  )
+  for record in expired {
+    match trash_file(record.path, watch_dir) {
+      Ok(_) => {
+        let bucket =
+          TRASH_DIR_NAME + "/" + Int64::to_string(@rx.real_now())
+        publish_lifecycle(
+          bus,
+          events,
+          @config.LifecycleEventType::Destroyed,
+          record.path,
+          "moved to " + bucket,
+        )
+      }
+      Err(e) => {
+        let _ = e
+        println(
+          "[lifecycle] product.trash_failed path=" + record.path +
+          " err=" + e.to_string(),
+        )
+      }
+    }
+  }
+  (count, remaining)
 }
 
 ///|
@@ -634,25 +746,8 @@ pub fn ProductTracker::load(path : String) -> ProductTracker {
 }
 
 ///|
-/// 加密文件（P3 产物生命周期语义）
-///
-/// 参数：
-///   path - 文件路径
-///   key - 加密密钥（可选，未提供时使用默认密钥）
-///
-/// 返回：成功或失败
-///
-/// 诚实降级说明（实测确认，勿凭注释推翻）：
-///   rx 的 RhopCrypto 底层 Fernet 原语是 `extern "js"`（node:crypto），
-///   native/wasm 下加密返回空串、解密返回可诊断 Err——无法真正做实。
-///   本函数明确返回 Err（"当前目标不支持"），不再静默返回 Ok 伪装成功；
-///   且**绝不写入空密文**，以免破坏产物。若将来 rx 补齐 native crypto FFI，
-///   可在此接入 encrypt_secret/decrypt_secret。
-pub fn encrypt_file(path : String, key : String?) -> Result[Unit, String] {
-  let _ = path
-  let _ = key
-  Err("产物加密当前目标不支持：rx Fernet 原语仅 js 可用（native/wasm 无 node:crypto），已诚实降级；不写入空密文以免破坏产物")
-}
+/// 产物加解密入口在 `action/crypto.mbt`（复用 rx rhop 的纯 MoonBit
+/// AES-256-GCM 密码臂真做实）；此处不再保留历史降级占位实现。
 
 ///|
 /// 生命周期事件（供 EventBus 发布）
@@ -1042,6 +1137,11 @@ pub fn run_action(
   watch_dir : String,
   watch_id~ : String = "",
   registry~ : InternalRegistry = InternalRegistry::new(),
+  // P3：产物生命周期事件出口（None = 只落本地累加器 + 可诊断日志）
+  bus~ : LifecycleBus? = None,
+  events~ : Ref[Array[LifecycleEvent]] = Ref::Ref([]),
+  // P3：TTL 追踪表引用（daemon 持有，sweep 任务复用同一实例）
+  tracked~ : Ref[ProductTracker] = Ref::Ref({ records: [] }),
 ) -> Result[ActionOutcome, String] {
   // 记录执行开始时间
   let start_time_ns = Int64::from_int(@rx.real_now().to_int())
@@ -1051,18 +1151,13 @@ pub fn run_action(
       let outcome = run_command_action(spec, ev, policy, watch_dir)
       match (spec.acceptance, outcome.accepted) {
         (Some(_), false) => {
-          // 验收不过：发出 product.invalid 生命周期事件（可诊断日志），
+          // 验收不过：发出 product.invalid 生命周期事件（EventBus + 可诊断日志），
           // 保留真实 exit_code 与输出原文；不做自动重试（重试留给上层）
-          let inv = LifecycleEvent::new(
+          publish_lifecycle(
+            bus,
+            events,
             @config.LifecycleEventType::Invalid,
             ev.path,
-          )
-          println(
-            "[lifecycle] " +
-            inv.event_name() +
-            " path=" +
-            inv.path +
-            " reason=" +
             outcome.acceptance_reason,
           )
           Ok(outcome)
@@ -1088,6 +1183,30 @@ pub fn run_action(
     }
     "internal" => run_internal_action(registry, spec, ev, watch_dir)
     other => Err("未知 action kind: " + other)
+  }
+
+  // P3：产物生命周期登记——command 动作真实成功（含验收通过）时，
+  //   1) 发 `product.created`（进入 EventBus，供下游订阅）；
+  //   2) 按 spec.ttl / spec.cleanup 登记 TTL 追踪（ttl<=0 或 cleanup=none
+  //      不登记，与 expired_records 口径一致）。
+  // 仅对 command 生效：该 kind 有可观测的 exit/acceptance 语义；
+  // mcp/webhook/internal 无稳定"产物成功"判据，登记会制造假到期。
+  if spec.kind == "command" {
+    match result {
+      Ok(o) => {
+        if o.accepted {
+          publish_lifecycle(
+            bus,
+            events,
+            @config.LifecycleEventType::Created,
+            ev.path,
+            "",
+          )
+          tracked.val = tracked.val.register_spec(ev.path, spec)
+        }
+      }
+      Err(_) => ()
+    }
   }
 
   // 记录执行结束时间

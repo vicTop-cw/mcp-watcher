@@ -8,7 +8,7 @@
 
 ///|
 /// SQLite 动态值：用于 bind 参数与 column 结果读取。
-pub enum SqlValue {
+pub(all) enum SqlValue {
   Null
   Int(Int32)
   Int64(Int64)

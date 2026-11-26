@@ -142,7 +142,7 @@ moonbit_bytes_t moonbit_index_stat(moonbit_bytes_t path) {
   char pp[1024];
   static char json[256];
   if (!p || plen <= 0 || plen >= 1000) {
-    return make_json("{\"ok\":0}", 7);
+    return make_json("{\"ok\":0}", 8);
   }
   memcpy(pp, p, plen);
   pp[plen] = '\0';
@@ -150,7 +150,7 @@ moonbit_bytes_t moonbit_index_stat(moonbit_bytes_t path) {
 #if PLATFORM_WINDOWS
   WIN32_FILE_ATTRIBUTE_DATA info;
   if (!GetFileAttributesExA(pp, GetFileExInfoStandard, &info)) {
-    return make_json("{\"ok\":0}", 7);
+    return make_json("{\"ok\":0}", 8);
   }
   int is_dir = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
   // FILETIME: 100ns since 1601-01-01 -> unix 秒
@@ -167,7 +167,7 @@ moonbit_bytes_t moonbit_index_stat(moonbit_bytes_t path) {
     is_dir ? 1 : 0, size, mt, ct);
 #else
   struct stat st;
-  if (stat(pp, &st) != 0) return make_json("{\"ok\":0}", 7);
+  if (stat(pp, &st) != 0) return make_json("{\"ok\":0}", 8);
   snprintf(json, sizeof(json),
     "{\"ok\":1,\"is_dir\":%d,\"size\":%lld,\"mtime\":%lld,\"ctime\":%lld}",
     S_ISDIR(st.st_mode) ? 1 : 0,
@@ -182,7 +182,7 @@ moonbit_bytes_t moonbit_index_mkdir(moonbit_bytes_t path) {
   const char *p = (const char *)path;
   int32_t plen = Moonbit_array_length(path);
   char pp[1024];
-  if (!p || plen <= 0 || plen >= 1000) return make_json("{\"ok\":0}", 7);
+  if (!p || plen <= 0 || plen >= 1000) return make_json("{\"ok\":0}", 8);
   memcpy(pp, p, plen);
   pp[plen] = '\0';
 
@@ -198,11 +198,11 @@ moonbit_bytes_t moonbit_index_mkdir(moonbit_bytes_t path) {
     }
   }
   if (CreateDirectoryA(pp, NULL)) {
-    return make_json("{\"ok\":1}", 7);
+    return make_json("{\"ok\":1}", 8);
   } else {
     DWORD err = GetLastError();
-    if (err == ERROR_ALREADY_EXISTS) return make_json("{\"ok\":1}", 7);
-    return make_json("{\"ok\":0}", 7);
+    if (err == ERROR_ALREADY_EXISTS) return make_json("{\"ok\":1}", 8);
+    return make_json("{\"ok\":0}", 8);
   }
 #else
   int n = plen;
@@ -214,8 +214,8 @@ moonbit_bytes_t moonbit_index_mkdir(moonbit_bytes_t path) {
       pp[i] = save;
     }
   }
-  if (mkdir(pp, 0755) == 0) return make_json("{\"ok\":1}", 7);
-  if (errno == EEXIST) return make_json("{\"ok\":1}", 7);
-  return make_json("{\"ok\":0}", 7);
+  if (mkdir(pp, 0755) == 0) return make_json("{\"ok\":1}", 8);
+  if (errno == EEXIST) return make_json("{\"ok\":1}", 8);
+  return make_json("{\"ok\":0}", 8);
 #endif
 }

@@ -313,9 +313,9 @@ test "statement: bind and column" {
   let db = @sqlite.Database::open(":memory:").unwrap()
   db.exec("CREATE TABLE t (id INTEGER, name TEXT, value REAL)") |> ignore
   let stmt = db.prepare("INSERT INTO t VALUES (?, ?, ?)").unwrap()
-  stmt.bind(1, Int(42)) |> ignore
-  stmt.bind(2, Text(str_to_bytes("Alice"))) |> ignore
-  stmt.bind(3, Double(3.14)) |> ignore
+  stmt.bind(1, @sqlite.SqlValue::Int(42)) |> ignore
+  stmt.bind(2, @sqlite.SqlValue::Text(str_to_bytes("Alice"))) |> ignore
+  stmt.bind(3, @sqlite.SqlValue::Double(3.14)) |> ignore
   stmt.execute() |> ignore
   stmt.finalize()
   let select_stmt = db.query("SELECT * FROM t WHERE id = 42").unwrap()
@@ -346,12 +346,12 @@ test "statement: bind all types" {
   )
   |> ignore
   let stmt = db.prepare("INSERT INTO t VALUES (?, ?, ?, ?, ?, ?)").unwrap()
-  stmt.bind(1, Int(1)) |> ignore
-  stmt.bind(2, Int(100)) |> ignore
-  stmt.bind(3, Double(2.71828)) |> ignore
-  stmt.bind(4, Text(str_to_bytes("Hello"))) |> ignore
-  stmt.bind(5, Blob(str_to_bytes("binary"))) |> ignore
-  stmt.bind(6, Null) |> ignore
+  stmt.bind(1, @sqlite.SqlValue::Int(1)) |> ignore
+  stmt.bind(2, @sqlite.SqlValue::Int(100)) |> ignore
+  stmt.bind(3, @sqlite.SqlValue::Double(2.71828)) |> ignore
+  stmt.bind(4, @sqlite.SqlValue::Text(str_to_bytes("Hello"))) |> ignore
+  stmt.bind(5, @sqlite.SqlValue::Blob(str_to_bytes("binary"))) |> ignore
+  stmt.bind(6, @sqlite.SqlValue::Null) |> ignore
   stmt.execute() |> ignore
   stmt.finalize()
   let select_stmt = db.query("SELECT * FROM t WHERE id = 1").unwrap()
@@ -387,7 +387,11 @@ test "statement: bind all" {
   let db = @sqlite.Database::open(":memory:").unwrap()
   db.exec("CREATE TABLE t (id INTEGER, name TEXT, value REAL)") |> ignore
   let stmt = db.prepare("INSERT INTO t VALUES (?, ?, ?)").unwrap()
-  stmt.bind_all([Int(1), Text(str_to_bytes("Alice")), Double(3.14)]) |> ignore
+  stmt.bind_all([
+    @sqlite.SqlValue::Int(1),
+    @sqlite.SqlValue::Text(str_to_bytes("Alice")),
+    @sqlite.SqlValue::Double(3.14),
+  ]) |> ignore
   stmt.execute() |> ignore
   stmt.finalize()
   let select_stmt = db.query("SELECT * FROM t WHERE id = 1").unwrap()

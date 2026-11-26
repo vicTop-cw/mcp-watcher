@@ -1,5 +1,5 @@
 /// fs_nodes 行模型与 JSON 输出（vector-index-design §3.2 / §6.2）
-pub struct Node {
+pub(all) struct Node {
   path : String
   rel_path : String
   parent : String?
@@ -34,7 +34,7 @@ pub fn node_to_json(n : Node) -> String {
 /// 取路径末段（文件名/目录名）
 pub fn path_leaf(p : String) -> String {
   let s = normalize_slash(p)
-  let idx = s.rindex('/')
+  let idx = s.rev_find("/")
   match idx {
     Some(i) => s.substring(start=i + 1, end=s.length())
     None => s

@@ -4,8 +4,6 @@
 ///   - 分批事务（每批提交并写 meta.walk_state = 当前目录）
 ///   - 中断重跑以 INSERT OR REPLACE 幂等覆盖（不产生重复节点）
 ///   - 已有库且 meta.walk_state = "done"、节点数 > 0 时跳过全量，直接进入增量
-use @sqlite
-use @config
 
 pub struct WalkResult {
   dirs : Int64

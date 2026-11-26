@@ -2,9 +2,6 @@
 ///
 /// 约定：单节点操作在调用方提供的**事务**内完成（walk 分批事务、事件单事务）；
 ///   fts 同步与元数据同事务，保证原子一致。
-use @sqlite
-use @config
-use @json
 
 /// stat FFI 返回解析
 pub struct StatInfo {
@@ -15,14 +12,19 @@ pub struct StatInfo {
   ctime : Int64
 }
 
+#borrow(path)
 extern "C" fn index_list_dir(path : Bytes) -> Bytes = "moonbit_index_list_dir"
+
+#borrow(path)
 extern "C" fn index_stat(path : Bytes) -> Bytes = "moonbit_index_stat"
+
+#borrow(path)
 extern "C" fn index_mkdir(path : Bytes) -> Bytes = "moonbit_index_mkdir"
 
 /// 列目录（目录条目带 "/" 后缀）
 pub fn list_dir(path : String) -> Array[String] {
   let out : Array[String] = []
-  let raw = index_list_dir(path.as_bytes())
+  let raw = index_list_dir(@utf8.encode(path))
   if raw.length() == 0 {
     return out
   }
@@ -32,38 +34,35 @@ pub fn list_dir(path : String) -> Array[String] {
 
 /// stat 路径
 pub fn stat_path(path : String) -> StatInfo? {
-  let raw = index_stat(path.as_bytes())
+  let raw = index_stat(@utf8.encode(path))
   if raw.length() == 0 {
     return None
   }
   let txt = bytes_to_str(raw)
-  let obj = @json.Json::parse(txt)
-  match obj {
-    Some(j) => {
-      let d = j.as_object()
-      if d is None {
+  let j = @json.parse(txt) catch {
+    _ => return None
+  }
+  match j {
+    @json.Json::Object(map) => {
+      if !get_bool(map, "ok") {
         return None
       }
-      let map = d.unwrap()
-      let ok = get_bool(map, "ok")
-      if not ok {
-        return None
-      }
-      Some({
+      let info : StatInfo = {
         ok: true,
         is_dir: get_bool(map, "is_dir"),
         size: get_int(map, "size"),
         mtime: get_int(map, "mtime"),
         ctime: get_int(map, "ctime"),
-      } : StatInfo)
+      }
+      Some(info)
     }
-    None => None
+    _ => None
   }
 }
 
 /// 递归创建目录（父目录不存在则创建）
 pub fn ensure_dir(path : String) -> Bool {
-  let raw = index_mkdir(path.as_bytes())
+  let raw = index_mkdir(@utf8.encode(path))
   raw.length() > 0 && bytes_to_str(raw) == "{\"ok\":1}"
 }
 
@@ -87,23 +86,22 @@ pub fn upsert_node(
     Some(p) => p
     None => ""
   }
-  if old_rowid is Some(v) {
-    let rowid_val = v.unwrap()
+  if old_rowid is Some(rowid_val) {
     let stmt = db.prepare(
       "INSERT OR REPLACE INTO fs_nodes(rowid, path, rel_path, parent, depth, type, size, mtime, ctime, ext) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     if stmt is Some(st0) {
       let st = st0
       let _ = st.bind(1, @sqlite.SqlValue::Int64(rowid_val))
-      let _ = st.bind(2, @sqlite.SqlValue::Text(path.as_bytes()))
-      let _ = st.bind(3, @sqlite.SqlValue::Text(rel_path.as_bytes()))
-      let _ = st.bind(4, if parent is Some(p) { @sqlite.SqlValue::Text(p.as_bytes()) } else { @sqlite.SqlValue::Null })
+      let _ = st.bind(2, @sqlite.SqlValue::Text(@utf8.encode(path)))
+      let _ = st.bind(3, @sqlite.SqlValue::Text(@utf8.encode(rel_path)))
+      let _ = st.bind(4, if parent is Some(p) { @sqlite.SqlValue::Text(@utf8.encode(p)) } else { @sqlite.SqlValue::Null })
       let _ = st.bind(5, @sqlite.SqlValue::Int(depth))
-      let _ = st.bind(6, @sqlite.SqlValue::Text(node_type.as_bytes()))
+      let _ = st.bind(6, @sqlite.SqlValue::Text(@utf8.encode(node_type)))
       let _ = st.bind(7, @sqlite.SqlValue::Int64(size))
       let _ = st.bind(8, @sqlite.SqlValue::Int64(mtime))
       let _ = st.bind(9, @sqlite.SqlValue::Int64(ctime))
-      let _ = st.bind(10, @sqlite.SqlValue::Text(ext.as_bytes()))
+      let _ = st.bind(10, @sqlite.SqlValue::Text(@utf8.encode(ext)))
       let _ = st.execute()
       st.finalize()
     }
@@ -115,15 +113,15 @@ pub fn upsert_node(
     )
     if stmt is Some(st0) {
       let st = st0
-      let _ = st.bind(1, @sqlite.SqlValue::Text(path.as_bytes()))
-      let _ = st.bind(2, @sqlite.SqlValue::Text(rel_path.as_bytes()))
-      let _ = st.bind(3, if parent is Some(p) { @sqlite.SqlValue::Text(p.as_bytes()) } else { @sqlite.SqlValue::Null })
+      let _ = st.bind(1, @sqlite.SqlValue::Text(@utf8.encode(path)))
+      let _ = st.bind(2, @sqlite.SqlValue::Text(@utf8.encode(rel_path)))
+      let _ = st.bind(3, if parent is Some(p) { @sqlite.SqlValue::Text(@utf8.encode(p)) } else { @sqlite.SqlValue::Null })
       let _ = st.bind(4, @sqlite.SqlValue::Int(depth))
-      let _ = st.bind(5, @sqlite.SqlValue::Text(node_type.as_bytes()))
+      let _ = st.bind(5, @sqlite.SqlValue::Text(@utf8.encode(node_type)))
       let _ = st.bind(6, @sqlite.SqlValue::Int64(size))
       let _ = st.bind(7, @sqlite.SqlValue::Int64(mtime))
       let _ = st.bind(8, @sqlite.SqlValue::Int64(ctime))
-      let _ = st.bind(9, @sqlite.SqlValue::Text(ext.as_bytes()))
+      let _ = st.bind(9, @sqlite.SqlValue::Text(@utf8.encode(ext)))
       let _ = st.execute()
       st.finalize()
     }
@@ -140,7 +138,7 @@ fn rowid_of(db : @sqlite.Database, path : String) -> Int64? {
     return None
   }
   let st = stmt.unwrap()
-  let _ = st.bind(1, @sqlite.SqlValue::Text(path.as_bytes()))
+  let _ = st.bind(1, @sqlite.SqlValue::Text(@utf8.encode(path)))
   if st.step() {
     let v = st.column(0)
     st.finalize()
@@ -195,8 +193,8 @@ pub fn delete_path(db : @sqlite.Database, path : String) -> Unit {
   let stmt = db.prepare("DELETE FROM fs_nodes WHERE path = ? OR path LIKE ? || '/%'")
   if stmt is Some(st0) {
     let st = st0
-    let _ = st.bind(1, @sqlite.SqlValue::Text(path.as_bytes()))
-    let _ = st.bind(2, @sqlite.SqlValue::Text(path.as_bytes()))
+    let _ = st.bind(1, @sqlite.SqlValue::Text(@utf8.encode(path)))
+    let _ = st.bind(2, @sqlite.SqlValue::Text(@utf8.encode(path)))
     let _ = st.execute()
     st.finalize()
   }
@@ -233,22 +231,22 @@ pub fn rename_node(
     let stmt = db.prepare("UPDATE fs_nodes SET path = ?, parent = ?, rel_path = ?, depth = ? WHERE path = ?")
     if stmt is Some(st0) {
       let st = st0
-      let _ = st.bind(1, @sqlite.SqlValue::Text(newp.as_bytes()))
+      let _ = st.bind(1, @sqlite.SqlValue::Text(@utf8.encode(newp)))
       let _ = st.bind(2, match new_parent {
-        Some(p) => @sqlite.SqlValue::Text(p.as_bytes())
+        Some(p) => @sqlite.SqlValue::Text(@utf8.encode(p))
         None => @sqlite.SqlValue::Null
       })
-      let _ = st.bind(3, @sqlite.SqlValue::Text(new_rel.as_bytes()))
+      let _ = st.bind(3, @sqlite.SqlValue::Text(@utf8.encode(new_rel)))
       let _ = st.bind(4, @sqlite.SqlValue::Int(new_depth))
-      let _ = st.bind(5, @sqlite.SqlValue::Text(oldp.as_bytes()))
+      let _ = st.bind(5, @sqlite.SqlValue::Text(@utf8.encode(oldp)))
       let _ = st.execute()
       st.finalize()
     }
     // fts 同步：删除旧词条 + 插入新词条
     let rowid = rowid_of(db, oldp)
     if rowid is Some(v) {
-      fts_delete(db, v.unwrap())
-      fts_upsert(db, v.unwrap(), newp, new_rel)
+      fts_delete(db, v)
+      fts_upsert(db, v, newp, new_rel)
     }
   }
 }
@@ -308,7 +306,7 @@ pub fn rel_of(watch_dir : String, path : String) -> String {
 /// 父目录路径（根返回 None）
 fn parent_of(path : String) -> String? {
   let p = normalize_slash(path)
-  let idx = p.rindex('/')
+  let idx = p.rev_find("/")
   match idx {
     None => None
     Some(i) => {
@@ -324,7 +322,7 @@ fn parent_of(path : String) -> String? {
 /// 小写扩展名（不含点；dir 调用方置 "")
 fn ext_of(path : String) -> String {
   let leaf = path_leaf(path)
-  let idx = leaf.rindex('.')
+  let idx = leaf.rev_find(".")
   match idx {
     None => ""
     Some(i) => {
@@ -345,8 +343,8 @@ fn select_under_rows(db : @sqlite.Database, path : String) -> Array[(String, Str
   )
   if stmt is Some(st0) {
     let st = st0
-    let _ = st.bind(1, @sqlite.SqlValue::Text(path.as_bytes()))
-    let _ = st.bind(2, @sqlite.SqlValue::Text(path.as_bytes()))
+    let _ = st.bind(1, @sqlite.SqlValue::Text(@utf8.encode(path)))
+    let _ = st.bind(2, @sqlite.SqlValue::Text(@utf8.encode(path)))
     while st.step() {
       let p = bytes_to_str(st.column_text(0))
       let r = bytes_to_str(st.column_text(1))
@@ -369,8 +367,8 @@ fn select_rows_under(db : @sqlite.Database, path : String) -> Array[Int64] {
   )
   if stmt is Some(st0) {
     let st = st0
-    let _ = st.bind(1, @sqlite.SqlValue::Text(path.as_bytes()))
-    let _ = st.bind(2, @sqlite.SqlValue::Text(path.as_bytes()))
+    let _ = st.bind(1, @sqlite.SqlValue::Text(@utf8.encode(path)))
+    let _ = st.bind(2, @sqlite.SqlValue::Text(@utf8.encode(path)))
     while st.step() {
       match st.column(0) {
         @sqlite.SqlValue::Int64(v) => out.push(v)
@@ -391,9 +389,9 @@ fn fts_upsert(db : @sqlite.Database, rowid : Int64, path : String, rel : String)
   if stmt is Some(st0) {
     let st = st0
     let _ = st.bind(1, @sqlite.SqlValue::Int64(rowid))
-    let _ = st.bind(2, @sqlite.SqlValue::Text(path.as_bytes()))
-    let _ = st.bind(3, @sqlite.SqlValue::Text(path_leaf(path).as_bytes()))
-    let _ = st.bind(4, @sqlite.SqlValue::Text(rel.as_bytes()))
+    let _ = st.bind(2, @sqlite.SqlValue::Text(@utf8.encode(path)))
+    let _ = st.bind(3, @sqlite.SqlValue::Text(@utf8.encode(path_leaf(path))))
+    let _ = st.bind(4, @sqlite.SqlValue::Text(@utf8.encode(rel)))
     let _ = st.execute()
     st.finalize()
   }
@@ -410,43 +408,38 @@ fn fts_delete(db : @sqlite.Database, rowid : Int64) -> Unit {
 }
 
 /// 解析 FFI JSON
-fn get_bool(m : @json.JsonObject, key : String) -> Bool {
+fn get_bool(m : Map[String, @json.Json], key : String) -> Bool {
   match m.get(key) {
-    Some(j) => j.as_bool().unwrap_or(false)
-    None => false
+    Some(@json.Json::True) => true
+    Some(@json.Json::False) => false
+    // C stub 输出 {"ok":1} / {"is_dir":0}，数字布尔一并接受
+    Some(@json.Json::Number(n, ..)) => n != 0.0
+    _ => false
   }
 }
 
-fn get_int(m : @json.JsonObject, key : String) -> Int64 {
+fn get_int(m : Map[String, @json.Json], key : String) -> Int64 {
   match m.get(key) {
-    Some(j) => {
-      match j.as_number() {
-        Some(n) => n.to_int64()
-        None => 0L
-      }
-    }
-    None => 0L
+    Some(@json.Json::Number(n, ..)) => n.to_int64()
+    _ => 0L
   }
 }
 
 fn parse_json_str_array(txt : String, out : Array[String]) -> Array[String] {
-  match @json.Json::parse(txt) {
-    Some(j) => {
-      match j.as_array() {
-        Some(arr) => {
-          for item in arr {
-            match item.as_string() {
-              Some(s) => out.push(s)
-              None => ()
-            }
-          }
-          out
-        }
-        None => out
-      }
-    }
-    None => out
+  let j = @json.parse(txt) catch {
+    _ => return out
   }
+  match j {
+    @json.Json::Array(arr) =>
+      for item in arr {
+        match item {
+          @json.Json::String(s) => out.push(s)
+          _ => ()
+        }
+      }
+    _ => ()
+  }
+  out
 }
 
 /// Bytes -> UTF-8 String（action 包同款解码）

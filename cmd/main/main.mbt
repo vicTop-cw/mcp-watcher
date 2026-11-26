@@ -184,6 +184,11 @@ pub fn parse_args(argv : Array[String]) -> CliArgs {
     } else if a == "--db" && i.val + 1 < argv.length() {
       db = argv[i.val + 1]
       i.val = i.val + 2
+    } else if command == "search" && !a.has_prefix("-") && watch_dir == "" {
+      // T0r167 F4：文档口径 `search <watch_dir>` 位置参数
+      //（首个非旗标 token；--watch-dir 旗标口径向后兼容）
+      watch_dir = a
+      i.val = i.val + 1
     } else {
       i.val = i.val + 1
     }
@@ -228,6 +233,15 @@ const DEFAULT_RULES_FILE = ".mcp-watch.json"
 ///|
 /// 默认 pidfile 文件名（pidfile_path 缺省值）
 const DEFAULT_PIDFILE_NAME = ".mcp-watch.pid"
+
+///|
+/// 产物 TTL 追踪表文件名（JSONL，与 pidfile 同目录）
+const DEFAULT_TRACKER_FILE_NAME = ".mcp-watch.ttl"
+
+///|
+/// TTL 到期清扫周期（毫秒；P3 生命周期闭环：追踪表内存态可能因重启丢失，
+/// 故由独立后台任务按真实时间周期扫描 + 回收进回收站）
+const TTL_SWEEP_INTERVAL_MS : Int64 = 10000L
 
 ///|
 /// 热重载防抖保底窗口（毫秒；debounce_ms <= 0 时使用，
@@ -331,6 +345,16 @@ pub fn pidfile_content(watch_id : String, pid : Int32) -> String {
 }
 
 ///|
+/// 产物 TTL 追踪表持久化路径（与 pidfile 同目录，JSONL 逐行）
+pub fn tracker_file_path(watch_dir : String) -> String {
+  if watch_dir == "" {
+    DEFAULT_TRACKER_FILE_NAME
+  } else {
+    watch_dir + "/" + DEFAULT_TRACKER_FILE_NAME
+  }
+}
+
+///|
 /// 守护进程主体（async）
 ///
 /// test-mode 下把结果写 JSONL；非 test-mode 走标准输出。
@@ -349,6 +373,15 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
   let reg = @scheduler.build_internal_registry(state)
   // EP-02b：已挂账 id 集——热重载增量重挂的差集依据
   let attached_ids : Ref[Array[String]] = Ref::Ref([])
+  // P3：产物生命周期——独立事件总线 + TTL 追踪表（JSONL 持久化，重启不丢）。
+  // 规则动作成功后由 run_action 登记 TTL 并发 product.created；清扫任务按
+  // 真实时间周期扫到期产物并移入回收站，发 product.destroyed。
+  let lifecycle_bus = @action.new_lifecycle_bus()
+  let tracker_path = tracker_file_path(cfg.watch_dir)
+  let tracker_ref : Ref[@action.ProductTracker] = Ref::Ref(
+    @action.ProductTracker::load(tracker_path),
+  )
+  let lifecycle_events : Ref[Array[@action.LifecycleEvent]] = Ref::Ref([])
   let n = @scheduler.attach_rules(
     cfg.rules,
     bus,
@@ -361,6 +394,9 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
     registry=reg,
     rules_ref=Some(rules_ref),
     attached_ids=Some(attached_ids),
+    tracked=tracker_ref,
+    lifecycle_bus=Some(lifecycle_bus),
+    lifecycle_events=lifecycle_events,
   )
   println("  已注册订阅：" + n.to_string())
 
@@ -395,6 +431,9 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
         registry=reg,
         rules_ref=Some(rules_ref),
         attached_ids=Some(attached_ids),
+        tracked=tracker_ref,
+        lifecycle_bus=Some(lifecycle_bus),
+        lifecycle_events=lifecycle_events,
       )
       println(
         "[reload] 新增规则订阅：" +
@@ -501,6 +540,32 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
         paused=state.paused,
       )
     })
+    // P3：TTL 到期清扫任务——按真实时间周期扫追踪表，把到期产物移入
+    // `<watch_dir>/.mcp-watcher-trash/<时间戳>/`（可恢复），并即时持久化
+    // 剩余追踪表（重启不丢）。与真实时钟驱动任务并行，互不影响。
+    let _ = group.spawn(fn() {
+      for ;; {
+        @async.sleep(TTL_SWEEP_INTERVAL_MS.to_int())
+        let (count, remaining) = tracker_ref.val.sweep_expired_to_trash(
+          cfg.watch_dir,
+          bus=Some(lifecycle_bus),
+          events=lifecycle_events,
+        )
+        if count > 0 {
+          println(
+            "  [lifecycle] TTL 到期回收：" +
+            count.to_string() +
+            " 个产物已移入回收站",
+          )
+        }
+        tracker_ref.val = remaining
+        let saved = tracker_ref.val.save(tracker_path)
+        match saved {
+          Ok(_) => ()
+          Err(e) => println("  [lifecycle] 追踪表持久化失败：" + e)
+        }
+      }
+    })
     // 等待任务完成（stop-after 触发时，watch 任务会自然结束）
   })
   // 退出前删除就绪哨兵文件
@@ -591,38 +656,25 @@ async fn main {
   let args = parse_args(argv)
   match args.command {
     "validate" => {
+      // T0r167 F3：接通退出码（文档口径 0=通过 / 1=失败，此前恒 0）
       let code = cmd_validate(args)
-      if code == EXIT_SUCCESS {
-        ()
-      } else {
-        ()
+      if code != EXIT_SUCCESS {
+        @env.exit(code)
       }
     }
     "run" => if args.once { cmd_run_once(args) } else { cmd_run(args) }
     "status" => cmd_status(args)
     "stop" => cmd_stop(args)
     "start" => {
-      let code = cmd_start(args)
-      if code == EXIT_SUCCESS {
-        ()
-      } else {
-        ()
-      }
+      let _ = cmd_start(args)
     }
     "reload" => {
-      let code = cmd_reload(args)
-      if code == EXIT_SUCCESS {
-        ()
-      } else {
-        ()
-      }
+      let _ = cmd_reload(args)
     }
     "search" => {
       let code = cmd_search(args)
-      if code == EXIT_SUCCESS {
-        ()
-      } else {
-        ()
+      if code != EXIT_SUCCESS {
+        @env.exit(code)
       }
     }
     _ => cmd_help()
@@ -919,7 +971,7 @@ fn cmd_reload(args : CliArgs) -> Int32 {
 /// 退出码：
 ///   0 - 查询成功（可无命中）
 ///   1 - 参数错误 / 配置校验失败
-///   2 - 索引未启用 / 库不存在 / 库损坏（提示 --rebuild-index）
+///   2 - 索引未启用 / 库不存在 / 库损坏
 fn cmd_search(args : CliArgs) -> Int32 {
   // 1. watch_dir 为位置参数，必填
   let watch_dir = args.watch_dir
@@ -946,7 +998,7 @@ fn cmd_search(args : CliArgs) -> Int32 {
       }
   }
   // 3. 校验 index.enabled
-  if not cfg.index.enabled {
+  if !cfg.index.enabled {
     println("✗ 索引未启用，请在配置中开启 index.enabled 并启动服务")
     return EXIT_INDEX_DISABLED
   }
@@ -956,9 +1008,9 @@ fn cmd_search(args : CliArgs) -> Int32 {
   } else {
     @index.resolve_db_path(watch_dir, cfg.index)
   }
-  if not file_exists(db_path) {
+  if !file_exists(db_path) {
     println("✗ 索引库不存在：" + db_path)
-    println("  请先启动服务建库，或执行 --rebuild-index（重建入口 P0 后置）")
+    println("  请先启动服务建库；若库损坏，删除库文件后重新启动服务")
     return EXIT_INDEX_DISABLED
   }
   // 5. 打开索引（存在库时增量校验，walk 未完成会自动补全）
@@ -970,7 +1022,7 @@ fn cmd_search(args : CliArgs) -> Int32 {
     }
     Ok(h) => {
       // 6. 构造查询条件（全部 AND 组合）
-      let opts = {
+      let opts : @index.SearchOptions = {
         keyword: args.keyword,
         node_type: args.type_filter,
         ext: args.ext_filter,
@@ -979,7 +1031,7 @@ fn cmd_search(args : CliArgs) -> Int32 {
         mtime_after: args.mtime_after,
         mtime_before: args.mtime_before,
         limit: args.limit,
-      } : @index.SearchOptions
+      }
       let nodes = @index.search(h.db, opts)
       // 7. 输出
       if args.format == "jsonl" {

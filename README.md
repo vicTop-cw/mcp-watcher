@@ -33,16 +33,20 @@ mcp-watcher 不是一个"通用的文件监控触发器"。它是面向 AI 工�
 
 | 能力 | 状态 | 说明 |
 |------|------|------|
-| **TTL** | ✅ 已落地 | 产物注册追踪表（可持久化）；到期判定 + `product.expired` 生命周期事件 + 追踪表移除 |
-| **trash**（回收站） | ✅ native 已做实 / 🚧 其他目标降级 | native 用 `moonbitlang/async/fs` 的 `mkdir`/`rename` 真实移入 `<watch_dir>/.trash/<name>.<ts>`（零新增 C FFI）；js/wasm 无此 API，诚实返回"不支持" |
-| **加密** | 🚧 明确降级（不可做实） | rx 的 Fernet 原语是 `extern "js"`（node:crypto），native/wasm 加密返回空串；本项返回可诊断 Err，**绝不写空密文破坏产物**，待 rx 补 native crypto FFI |
-| command | ✅ 已落地 | argv 数组执行，ExecPolicy **显式白名单**（规则不会自动放行命令）；拒绝事件现已落结果记录、可 e2e 对拍 |
-| mcp_tool_call / webhook / internal | 🚧 扩展位 EP-01 | 返回可诊断错误 |
+| **TTL** | ✅ 已落地 | command 动作成功后按 `ttl` 登记追踪表（JSONL 持久化，重启不丢）；守护进程周期清扫，到期发 `product.expired` → 物理回收 → 发 `product.destroyed`，追踪表移除 |
+| **trash**（回收站） | ✅ native 已做实 / 🚧 其他目标降级 | native 用 `moonbitlang/async/fs` 的 `mkdir`/`rename` 真实移入 `<watch_dir>/.mcp-watcher-trash/<时间戳>/<name>`（分桶、可按桶整体还原，零新增 C FFI）；js/wasm 无此 API，诚实返回"不支持" |
+| **加密** | ✅ 三目标均可编译（native 真做实） | 复用 rx rhop 的纯 MoonBit AES-256-GCM 密码臂（PBKDF2-HMAC-SHA256 派生密钥），`encrypt_file` / `decrypt_file` 往返恒等；错误密钥经 GCM tag 认证失败并返回可诊断 Err，不写坏产物 |
+| command | ✅ 已落地 | argv 数组执行，ExecPolicy **显式白名单**（规则不会自动放行命令）；拒绝事件落结果记录、可 e2e 对拍 |
+| internal | ✅ 已落地 | EP-01a 四 op：`reload_config` / `pause_watch` / `resume_watch` / `log_event` |
+| mcp_tool_call | ✅ js 落地 / 🚧 其他目标降级 | EP-01c stdio 桥：js 用 `spawnSync` 单层直连 + ExecPolicy 白名单；native/wasm 无同步 stdio 原语，返回可诊断错误 |
+| webhook | 🚧 扩展位 EP-01 | 返回可诊断错误 |
+| 工作区索引 | ✅ native（FTS5）/ 🚧 向量召回 P1 | SQLite FTS5 存文件/文件夹元数据（路径/类型/大小/mtime/ext），`search` 只读检索；embedding 列 P1 占位、当前恒空，**不是向量数据库** |
 
-> 设计取舍详见 `workbuddy/plan/p3-feasibility.md`（历史定位）。trash 后续发现
-> `moonbitlang/async@0.22.9`（rx 0.4.4 传递依赖）在 native 提供 `mkdir`/`rename` C stub，
-> 实测可做实，故由"规划中"升级为"native 已做实"；加密因底层依赖 node:crypto
-> 无法在 native 做实，维持诚实降级。两条路径均以实测为准，不把 no-op 包装成已实现。
+> 设计取舍详见 `workbuddy/plan/p3-feasibility.md`（历史定位快照，其中加密结论已过时）。
+> trash 侧发现 `moonbitlang/async@0.22.9` 在 native 提供 `mkdir`/`rename` C stub，
+> 实测可做实，故升级为"native 已做实"；加密侧进一步发现 rx 0.4.6 的 rhop 密码模块
+> 含**纯 MoonBit AES-256-GCM 臂**（非 js-only Fernet），故 native 亦可真做实，
+> `encrypt_file`/`decrypt_file` 往返恒等已由 native 门控测试验证。两条路径均以实测为准。
 
 #### 双门禁（schema v1.1 · PLAN-gates.md）
 
@@ -74,9 +78,13 @@ mcp-watcher 不是一个"通用的文件监控触发器"。它是面向 AI 工�
    └────────┬─────────┘
             ▼
    ┌──────────────────┐
-   │  action 生命周期   │  TTL✅ / trash(native✅) / 加密🚧 / command✅ / mcp🚧 / webhook🚧
+   │  action 生命周期   │  TTL✅ / trash(native✅) / 加密✅ / command✅ / mcp(js✅) / webhook🚧
    └──────────────────┘
             │
+            ▼
+   ┌──────────────────┐
+   │  index 元数据索引   │  native SQLite FTS5：目录/文件元数据 → search 只读检索
+   └────────┬─────────┘
             ▼
       自治结果（落盘 / 回写 / 通知），全程无需 Agent 介入
 ```
@@ -90,13 +98,15 @@ mcp-watcher 不是一个"通用的文件监控触发器"。它是面向 AI 工�
 | `config`    | 规则 DSL 模型 + JSON 解析 + 累积式校验 |
 | `watch`     | 文件系统事件源（后端扩展点 EP-01） |
 | `rule`      | 两层匹配算法（事件+glob、exclude 优先、条件 AND） |
-| `action`    | 生命周期动作（TTL✅ / trash native✅·其他🚧 / 加密🚧 / command✅…）扩展点 EP-01 |
+| `action`    | 生命周期动作（TTL✅ / trash native✅·其他🚧 / 加密✅ / command✅…）扩展点 EP-01 |
 | `ext`       | 扩展位注册表（EP-01~EP-12） |
 | `cron`      | cron 表达式解析与下次触发计算（纯逻辑、可测） |
 | `scheduler` | 事件源 + cron 合并的主循环（已接入 rx EventBus；含 guard/acceptance 双门禁与热重载接线） |
-| `cmd/main`  | CLI 入口（validate/start/status/run/reload/help；stop 为 P1） |
+| `cmd/main`  | CLI 入口（validate/start/status/run/reload/search/help；stop 为 P1） |
+| `index`     | 工作区文件/文件夹元数据索引（native 专属，SQLite FTS5；事件驱动增量更新 + 防自噬） |
+| `sqlite`    | SQLite 绑定（native C stub + 内置 SQLite 3.54.1 DLL/导入库，不依赖机器全局 sqlite3；js node:sqlite 双实现；`supported_targets=native` 供 index 使用） |
 
-> 实现期将复用兄弟项目 **rx-mbt**（响应式内核：EventBus / 真实时钟 / 原生监控 / 命令 Observable），详见 `rx-mbt/PLAN-mcp-watcher-apis.md`。
+> 事件内核复用兄弟项目 **rx-mbt**（响应式内核：EventBus / 真实时钟 / 原生监控 / 命令 Observable）。索引设计与向量召回扩展位见 `workbuddy/plan/vector-index-design.md`。
 
 ---
 
@@ -104,27 +114,28 @@ mcp-watcher 不是一个"通用的文件监控触发器"。它是面向 AI 工�
 
 - ✅ 产品定位与四大支柱（本文）
 - ✅ 详细设计决议 `workbuddy/plan/design-spec.md`、配置契约 `config-schema.md`、rx 依赖决策 `rx-mbt-dependency.md`、复用与测试规划 `reuse-and-test-plan.md`
-- ✅ **项目架构已落地**（本仓库包结构与核心类型）：`config`/`watch`/`rule`/`action`/`ext`/`cron`/`scheduler`/`cmd/main` 八个包 + `moon.mod`；提案与执行汇报见 `fist-mbt/plans/`、`fist-mbt/reports/`
-  - 门禁（2026-11-20 实测）：`moon check` 0 errors（36 条 Warning）；`moon test --target native` **222/222**；`moon test --target js` **191/191**；wasm-gc 编译失败（RX-MBT fs_* 未绑定，依赖侧缺口）；双进程 e2e 存在守护进程监控缺陷（见 `USAGE.md` §6.1），事件可达性已由 RX-MBT 探针证明。
-- ✅ 已完成：接入 rx-mbt 0.4.4（R1~R4）、CLI 子命令（validate/start/status/run/reload）、TTL 生命周期动作、trash 物理回收（native）、command + ExecPolicy 白名单、双门禁 guard/acceptance（schema v1.1）、热重载（EP-01d）、internal 动作四 op（EP-01a）、双进程集成测试物料（`tests/harness/`）
-- 🚧 规划中：加密（rx 无 native Fernet，见 `workbuddy/plan/p3-feasibility.md`）、mcp_tool_call/webhook 扩展位（EP-01）、守护进程监控缺陷修复（P1）、CLI stop 子命令（P1）
+- ✅ **项目架构已落地**（本仓库包结构）：`config`/`watch`/`rule`/`action`/`ext`/`cron`/`scheduler`/`cmd/main` 核心包 + `index`/`sqlite` 工作区索引包（native 专属）；当前版本 **0.2.3**（`moon.mod` 与 `util/version.mbt::APP_VERSION` 同源），依赖 `vicTop-cw/RX-MBT@0.4.6` + `moonbitlang/async@0.22.9` + `moonbitlang/x@0.5.5`
+  - 门禁（2026-11-23 实测，全量脚本 `scripts/test_all.sh` 全绿）：`moon check --target native` **0 errors / 82 warnings**；`moon test` 的 native / js / wasm 三轨各 **292 本项目用例、failed: 0**；e2e `basic` 与 `deny` 均 `RESULT: PASS`。wasm-gc 仍因 RX-MBT `fs_*` 未绑定编译失败（依赖侧缺口），不作为当前交付目标。读数以本次实测为准，历史数字不引述为当前值。
+- ✅ 已完成：CLI 子命令（validate/start/status/run/reload/search/help）、TTL 生命周期动作、trash 物理回收（native，`.mcp-watcher-trash/<时间戳>/<name>` 可恢复）、产物加解密（复用 rx rhop AES-256-GCM，往返可还原）、command + ExecPolicy 白名单、双门禁 guard/acceptance（schema v1.1）、热重载（EP-01d/EP-02b）、internal 四 op（EP-01a）、mcp_tool_call stdio 桥（仅 js，EP-01c）、interval 触发源（EP-03b）、SQLite FTS5 工作区元数据索引 + `search` 只读检索（native）、双进程集成测试物料（`tests/harness/`）
+- 🚧 规划中 / 诚实降级：向量召回（embedding 列 P1 占位，当前恒空，见 `workbuddy/plan/vector-index-design.md`）、webhook 扩展位、wasm-gc 目标（依赖侧缺口）、CLI stop 子命令（P1）；js/wasm 的 trash 物理回收因无 `@fs.mkdir`/`@fs.rename` 符号，诚实返回"不支持"
 
 ---
 
 ## 快速开始
 
 ```bash
-moon build --target native
+moon build --target native cmd/main   # 只构建最终可执行文件；勿整包 build（库包 link flags 会报缺 main）
 
 # 产物：_build/native/debug/build/cmd/main/main.exe
 ./_build/native/debug/build/cmd/main/main.exe validate --rules .mcp-watch.json      # 校验规则
 ./_build/native/debug/build/cmd/main/main.exe run --rules .mcp-watch.json --watch-dir .   # 后台自治运行
 ./_build/native/debug/build/cmd/main/main.exe status --rules .mcp-watch.json --watch-dir .   # 观测
 ./_build/native/debug/build/cmd/main/main.exe reload --rules .mcp-watch.json        # 热重载
+./_build/native/debug/build/cmd/main/main.exe search . --keyword "report"   # 索引检索（位置参数 watch_dir；需 index.enabled=true 且已建库）
 ```
 
-> 完整使用说明（规则文件写法、字段说明、双门禁配置、FAQ）见 `USAGE.md`。
-> 已知限制：`stop` 子命令待实现（P1）；规则文件目录不在 `watch_dir` 内时 `run` 存在监控缺陷（见 `USAGE.md` §6.1）。
+> 完整使用说明（规则文件写法、字段说明、双门禁配置、索引配置、FAQ）见 `USAGE.md`。
+> 已知限制：`stop` 子命令待实现（P1）；规则目录不在 `watch_dir` 内时 `run` 存在监控缺陷（见 `USAGE.md` §6.1）；`search` 仅 native 可用，且索引为 FTS5 元数据检索非向量检索。
 
 ---
 
@@ -134,10 +145,12 @@ moon build --target native
 - `workbuddy/plan/config-schema.md` — 配置契约
 - `workbuddy/plan/rx-mbt-dependency.md` — 依赖决策
 - `workbuddy/plan/reuse-and-test-plan.md` — 复用与测试规划
+- `workbuddy/plan/vector-index-design.md` — 工作区元数据索引（FTS5）与向量召回扩展位设计
+- `PLAN-gates.md` — 双门禁（guard/acceptance）契约
 - `rx-mbt/PLAN-mcp-watcher-apis.md` — rx 增资计划
 - `tests/harness/README.md` — 双进程集成测试物料
 - `fist-mbt/plans/2026-11-12-architecture-proposal.md` — 本项目架构提案（FIST）
-- `competition/项目申报书.md` — 项目申报材料（验收读数见申报书 §11）
+- `competition/项目申报书.md` — 项目申报材料（精简版，与仓库根目录同名文件一致；验收读数见本文"当前状态"及 `USAGE.md` §8）
 
 ## 使用文档
 

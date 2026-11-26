@@ -1,10 +1,10 @@
 // action/trash_native_test.mbt —— trash 物理回收真做实验证（native 专属）
 //
-// 验证 @fs.mkdir + @fs.rename 真实把文件移入 <watch_dir>/.trash，
-// 原路径消失、回收目录内出现带时间戳的目标文件。
+// 验证 @fs.mkdir + @fs.rename 真实把文件移入
+// <watch_dir>/.mcp-watcher-trash/<时间戳>/<name>，原路径消失、回收桶内出现同名文件。
 
 ///|
-async test "trash_file native：文件被真实移入 .trash 目录" {
+async test "trash_file native：文件被真实移入 .mcp-watcher-trash 时间戳桶" {
   let base = "action/.trash-test"
   let _ = @fs.mkdir(base, recursive=true, allow_exist=true)
   defer (@fs.rmdir(base, recursive=true, allow_missing=true) catch { _ => () })

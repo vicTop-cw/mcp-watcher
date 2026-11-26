@@ -103,6 +103,10 @@ pub fn attach_rules(
   // EP-02b 已挂账 id 集（热重载增量重挂的差集依据）：Some = 每条规则挂订后
   // 追加 id；None = 不记账（位级兼容）
   attached_ids~ : Ref[Array[String]]? = None,
+  // P3：产物 TTL 追踪表 + 生命周期事件出口（daemon 持有；None = 只落本地累加器）
+  tracked~ : Ref[@action.ProductTracker] = Ref::Ref({ records: [] }),
+  lifecycle_bus~ : @action.LifecycleBus? = None,
+  lifecycle_events~ : Ref[Array[@action.LifecycleEvent]] = Ref::Ref([]),
 ) -> Int32 {
   // 按优先级降序排序（高优先级先执行）
   let sorted_rules = rules
@@ -181,7 +185,7 @@ pub fn attach_rules(
         if proceed {
           exec_actions(
             rule, fe, policy, logging_config, watch_dir, watch_id,
-            log, records, registry,
+            log, records, registry, tracked, lifecycle_bus, lifecycle_events,
           )
           // 记录已执行（once 语义）
           if rule.stop_after {
@@ -191,9 +195,13 @@ pub fn attach_rules(
       }
     }
     for ev_name in event_names_of(rule) {
-      let _ = bus.subscribe(ev_name, fn(ev : @rx.TriggerEvent[@watch.FsEvent]) {
-        fire(ev.payload)
-      })
+      // P1：priority 落到 TriggerRegistry（rx 派发时按 priority 降序、同优先保持
+      // 注册序）；规则表自身的预排序只决定注册序 tie-break，不再是唯一依据。
+      let _ = bus.subscribe(
+        ev_name,
+        fn(ev : @rx.TriggerEvent[@watch.FsEvent]) { fire(ev.payload) },
+        priority=rule.priority,
+      )
       subscribed.val = subscribed.val + 1
     }
     // EP-03b：interval 触发源——events 里的 "interval:<ms>" 条目经 EP-01d
@@ -231,11 +239,15 @@ fn exec_actions(
   log : Ref[Array[String]],
   records : Ref[Array[ExecRecord]],
   registry : @action.InternalRegistry,
+  // P3：TTL 追踪表 + 生命周期事件出口（None = 事件只落本地累加器）
+  tracked : Ref[@action.ProductTracker],
+  bus : @action.LifecycleBus?,
+  events : Ref[Array[@action.LifecycleEvent]],
 ) -> Unit {
   for a in rule.actions {
     match @action.run_action(
       a, fe, policy, logging_config, watch_dir, watch_id=watch_id,
-      registry=registry,
+      registry=registry, tracked=tracked, bus=bus, events=events,
     ) {
       Ok(o) => {
         if o.accepted {

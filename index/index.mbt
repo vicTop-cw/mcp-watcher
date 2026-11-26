@@ -2,10 +2,8 @@
 ///
 /// 启动流程（run_daemon / start 在事件监控启动**前**调用 open_index 完成建库，
 ///   防止增量事件丢失窗口；建库失败 → 返回 Err，调用方按"索引旁路降级"处理）。
-use @sqlite
-use @config
 
-pub struct IndexHandle {
+pub(all) struct IndexHandle {
   db : @sqlite.Database
   watch_dir : String
   cfg : @config.IndexConfig
@@ -32,7 +30,7 @@ pub fn open_index(
   let parent = parent_path(db_path)
   match parent {
     Some(p) => {
-      if not ensure_dir(p) {
+      if !ensure_dir(p) {
         return Err("索引库父目录创建失败: " + p)
       }
     }
@@ -48,12 +46,13 @@ pub fn open_index(
         let _ = full_walk(db, watch_dir, cfg, db_path)
         set_meta(db, "schema_version", meta_schema_version())
       }
-      Ok({
+      let h : IndexHandle = {
         db: db,
         watch_dir: watch_dir,
         cfg: cfg,
         db_path: db_path,
-      } : IndexHandle)
+      }
+      Ok(h)
     }
   }
 }
@@ -80,7 +79,7 @@ pub fn close(h : IndexHandle) -> Unit {
 /// 父路径（绝对路径的上一级；根/盘符返回 None）
 fn parent_path(path : String) -> String? {
   let p = normalize_slash(path)
-  let idx = p.rindex('/')
+  let idx = p.rev_find("/")
   match idx {
     None => None
     Some(i) => {

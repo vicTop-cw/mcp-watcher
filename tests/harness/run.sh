@@ -10,6 +10,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${SCRIPT_DIR}/../.."
+# native 可执行文件依赖内置 SQLite DLL
+export PATH="${PROJECT_DIR}/sqlite/vendor:$PATH"
 # moon.work 位于项目上一级时，native 产物可能落在工作区或项目 _build 下，
 # 用 glob 兜底定位（避免硬编码绝对路径）
 WORK_DIR="$(cd "${PROJECT_DIR}/.." && pwd)"
@@ -39,7 +41,8 @@ mkdir -p "${WATCH_DIR}"
 
 echo "=== 构建 native ==="
 cd "${PROJECT_DIR}"
-moon build --target native
+# 仅构建最终可执行文件：sqlite/index 库包的 link flags 会让库包自身的可执行包装失败
+moon build --target native cmd/main
 
 if [ ! -f "${BIN}" ]; then
   echo "找不到 native 产物：${BIN}"

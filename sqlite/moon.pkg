@@ -4,6 +4,7 @@ import {
   "moonbitlang/x/encoding" @encoding,
   "moonbitlang/core/bench",
   "moonbitlang/core/encoding/utf8" @utf8,
+  "moonbitlang/core/debug",
 }
 
 options(
@@ -11,5 +12,5 @@ options(
     "sqlite_js.mbt": [ "js" ],
   },
   "native-stub": [ "stub.c" ],
-  "linker-flags": [ "-lsqlite3" ],
+  link: { "native": { "cc-link-flags": "sqlite/vendor/sqlite3.lib" } },
 )

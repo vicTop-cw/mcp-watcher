@@ -15,7 +15,7 @@ test "ProductTracker: register adds record" {
 test "ProductTracker: cleanup_no_expired returns 0" {
   let tracker = @action.ProductTracker::new()
   let tracker = @action.ProductTracker::register(tracker, "/tmp/test.txt", 3600)
-  let (cleaned, _tracker) = @action.ProductTracker::cleanup_expired(
+  let (cleaned, _tracker, _expired) = @action.ProductTracker::cleanup_expired(
     tracker, "/tmp",
   )
   // 没有过期产物，清理数应为 0

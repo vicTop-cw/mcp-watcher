@@ -1,5 +1,4 @@
 /// embedding 列读写接口（P1 扩展位；P0 恒 NULL，仅提供能力位，见 §3.2）
-use @sqlite
 
 /// 读取 embedding（P0 恒 None）
 pub fn get_embedding(_db : @sqlite.Database, _path : String) -> Bytes? {
@@ -12,7 +11,7 @@ pub fn set_embedding(db : @sqlite.Database, path : String, blob : Bytes) -> Unit
   if stmt is Some(st0) {
     let st = st0
     let _ = st.bind(1, @sqlite.SqlValue::Blob(blob))
-    let _ = st.bind(2, @sqlite.SqlValue::Text(path.as_bytes()))
+    let _ = st.bind(2, @sqlite.SqlValue::Text(@utf8.encode(path)))
     let _ = st.execute()
     st.finalize()
   }

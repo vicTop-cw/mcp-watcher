@@ -1,4 +1,4 @@
-#include <sqlite3.h>
+#include "vendor/sqlite3.h"
 #include <moonbit.h>
 #include <stdio.h>
 #include <string.h>

@@ -1,14 +1,13 @@
 /// 排除规则（vector-index-design §3.4）
 ///
 /// 三级排除：
-///   1. 内置硬编码目录名（.trash/.git/node_modules/temp，任意层级，不可覆盖）
+///   1. 内置硬编码目录名（.mcp-watcher-trash/.git/node_modules/temp，任意层级，不可覆盖）
 ///   2. 索引库自身（db_path 及其 -wal/-shm 伴生文件）——防自噬
 ///   3. 配置 include/exclude glob（与内置取并集；include 非空时作为白名单）
-use @config
 
 /// 内置排除目录名（精确匹配目录末段，任意层级）
 fn builtin_excluded_name(name : String) -> Bool {
-  name == ".trash" || name == ".git" || name == "node_modules" || name == "temp"
+  name == ".mcp-watcher-trash" || name == ".git" || name == "node_modules" || name == "temp"
 }
 
 /// path 是否在 base 之下（base 自身不算；dir 语义，路径均规范化）
@@ -59,7 +58,7 @@ pub fn should_skip(
         break
       }
     }
-    if not hit {
+    if !hit {
       return true
     }
   }
@@ -114,7 +113,7 @@ fn match_globs(ps : Array[String], pi : Int, ss : Array[String], si : Int) -> Bo
   if si >= ss.length() {
     return false
   }
-  if not segment_match(pat, ss[si]) {
+  if !segment_match(pat, ss[si]) {
     return false
   }
   match_globs(ps, pi + 1, ss, si + 1)

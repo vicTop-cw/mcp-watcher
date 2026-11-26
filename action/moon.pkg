@@ -3,10 +3,12 @@ import {
   "vicTop-cw/mcp-watcher/watch",
   "vicTop-cw/mcp-watcher/util",
   "vicTop-cw/RX-MBT/rx",
+  "vicTop-cw/RX-MBT/rhop",
   "vicTop-cw/RX-MBT/rhop_task" @rt,
   "vicTop-cw/RX-MBT/monitor" @mon,
   "moonbitlang/async/fs" @fs,
   "moonbitlang/core/json",
+  "moonbitlang/core/env",
   "moonbitlang/core/ref",
   "moonbitlang/core/debug",
   "moonbitlang/core/async",
@@ -26,6 +28,8 @@ options(
     "guard_native_test.mbt": [ "native" ],
     "trash_native.mbt": [ "native" ],
     "trash_native_test.mbt": [ "native" ],
+    // P3 生命周期验收：走 @mon C FFI + @fs，native 专属
+    "p3_lifecycle_native_test.mbt": [ "native" ],
     "trash_stub.mbt": [ "js", "wasm" ],
     // EP-01b webhook：js 目标真实 HTTP e2e / native 目标诚实降级
     "webhook_js_test.mbt": [ "js" ],

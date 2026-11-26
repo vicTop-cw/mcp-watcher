@@ -1,12 +1,15 @@
 // SQLite bindings for MoonBit (Native backend via C FFI)
 
-// Opaque external types (corresponding to C pointers)
+// Opaque C pointers are carried as Int64 on native targets.
+// A plain abstract type can be represented as a GC-managed external object on
+// some native runtimes; passing that tagged value back into sqlite3_close()
+// corrupts the heap on Windows. Int64 keeps x64 pointers bit-exact.
 
 ///|
-type Sqlite3
+type Sqlite3 = Int64
 
 ///|
-type Sqlite3Stmt
+type Sqlite3Stmt = Int64
 
 // Low-level extern declarations
 // #borrow: Treats arguments as borrowed, MoonBit automatically manages memory

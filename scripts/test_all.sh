@@ -27,11 +27,15 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
 cd "$PROJECT_DIR" || { echo "FATAL: 无法进入项目目录 $PROJECT_DIR" >&2; exit 2; }
 
+# native 可执行文件运行时需要内置 SQLite DLL；MoonBit 不跨包传播 link flags，
+# 各最终可执行文件都链接 sqlite/vendor/sqlite3.lib，故统一把该目录放进 PATH。
+export PATH="$PROJECT_DIR/sqlite/vendor:$PATH"
+
 SKIP_LIST=""
 QUIET=0
 for arg in "$@"; do
   case "$arg" in
-    --skip=*) SKIP_LIST="${arg#--skip=}" ;;
+    --skip=*) SKIP_LIST="${SKIP_LIST:+${SKIP_LIST},}${arg#--skip=}" ;;
     --quiet|-q) QUIET=1 ;;
     -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "FATAL: 未知参数 $arg" >&2; exit 2 ;;
@@ -54,7 +58,7 @@ fi
 MOON_VERSION=$(moon version 2>&1 | head -1)
 
 # 本项目的包清单（tests/probe 是 native 专属集成探针）
-PACKAGES=(util config cron rule watch action ext scheduler cmd/main tests/probe)
+PACKAGES=(util config cron rule watch action ext sqlite index scheduler cmd/main tests/probe)
 
 echo "============================================================================="
 echo " mcp-watcher 跨目标测试总入口  scripts/test_all.sh"
@@ -147,21 +151,34 @@ run_check() {
 #   因此逐包累加会重复计数（例：-p watch 报 24，实为 util9+cron9+rule6 的依赖链）。
 #   本脚本的口径是「每个包**自身**的测试数」，
 #   故按包的测试源文件数计（ground truth），并用 moon 实测的 failed 数交叉校验。
-#   两者不一致时判 FAIL——防止"源码有例但没真跑"的假绿。
+#   T0r167 F1 收紧：逐包 rc≠0 或 failed≠0 计为包级失败并判 FAIL——
+#   防止"0 例真跑仍判 PASS"的假绿（js/wasm 轨曾整体假绿）。
+#   预期跳过以包自身 moon.pkg 声明 supported_targets="native"（如 sqlite /
+#   index / cmd/main）或无测试源（own=0）为权威；不按 moon 输出文本判
+#   （实测 "do not support target backend" 文本与构建缓存状态相关，部分状态
+#   `moon test -p` 对整个模块做目标校验、连带跨目标包 → 按文本判会假绿）。
 run_tests() {
   local target="$1"
   local label="$2"
+  # T0r167 F5：test 步此前未接 is_skipped，--skip=js/--skip=wasm 静默无效
+  #（实测：带 skip 参数 test-js 仍完整执行）；两种步名口径都接受
+  if is_skipped "test-$target" || is_skipped "$target"; then
+    printf '\n>>> [test-%s] SKIP\n' "$target"
+    SUMMARY_ROWS+=("test-$target|SKIP|-- 按 --skip 跳过 --|0")
+    return 0
+  fi
   printf '\n>>> [test-%s] %s\n' "$target" "$label"
   local t0 t1
   t0=$(now_ms)
-  local grand_failed=0 src_total=0
+  local grand_failed=0 src_total=0 pkg_failed=0
   local pkg_log
   pkg_log="$(mktemp -d)/pkgs.log"
   for pkg in "${PACKAGES[@]}"; do
-    local out
+    local out rc
     out="$(mktemp -d)/pkg.log"
     "$MOON_BIN" test --target "$target" -p "$pkg" > "$out" 2>&1
-    local rc
+    # T0r167 F1 根因：原代码 `local rc` 位于命令**之后**，rc=$? 读到的永远是
+    # `local` 自身的退出状态（恒 0）——包级构建失败从未被捕获（假绿真凶）
     rc=$?
     local t p f
     t=$(sed -nE 's/.*Total tests: *([0-9]+), *passed: *([0-9]+), *failed: *([0-9]+).*/\1/p' "$out" | tail -1)
@@ -170,15 +187,30 @@ run_tests() {
     t=${t:-0}; p=${p:-0}; f=${f:-0}
     # 该包自身的测试源文件数（ground truth）
     local own
-    own=$(grep -rhoE '^\s*test\s+"' "$pkg"/*.mbt 2>/dev/null | wc -l | tr -d ' ')
+    own=$(grep -rhoE '^\s*(async\s+)?test\s+"' "$pkg"/*.mbt 2>/dev/null | wc -l | tr -d ' ')
     src_total=$((src_total + own))
     grand_failed=$((grand_failed + f))
     printf '    %-16s own:%-4s run:%-4s passed:%-4s failed:%s\n' "$pkg" "$own" "$t" "$p" "$f" >> "$pkg_log"
-    # 注：tests/probe 被 moon.pkg 的 targets 门控为 native 专属，
-    #     故 js / wasm 目标下 run=0 属预期（非失败）；判绿只看 failed 与 src_total。
+    # 注：native-only 包（moon.pkg supported_targets="native"）与测试文件被
+    #     targets 门控的包（tests/probe）在 js / wasm 目标下 rc≠0 / run=0
+    #     属预期跳过（非失败）；判定见下方 T0r167 F1 逻辑。
     if [ "$rc" -ne 0 ] || [ "$f" -ne 0 ]; then
-      echo "    !! 包 $pkg 失败（rc=$rc failed=$f）" >&2
-      tail -n 25 "$out" >&2
+      # T0r167 F1（修正版）：预期跳过以包自身 moon.pkg 为权威
+      #（supported_targets="native"），或无测试源（own=0）；
+      # 不按 moon 输出文本判（缓存态相关，会假绿，见上方注释）
+      local expect_skip=0
+      if [ "$own" -eq 0 ]; then
+        expect_skip=1
+      elif grep -q 'supported_targets *= *"native"' "$pkg/moon.pkg" 2>/dev/null; then
+        expect_skip=1
+      fi
+      if [ "$expect_skip" -eq 1 ]; then
+        :
+      else
+        pkg_failed=$((pkg_failed + 1))
+        echo "    !! 包 $pkg 失败（rc=$rc failed=$f）" >&2
+        tail -n 25 "$out" >&2
+      fi
     fi
   done
   t1=$(now_ms)
@@ -186,6 +218,9 @@ run_tests() {
   local verdict detail
   if [ "$grand_failed" -ne 0 ]; then
     verdict="FAIL"; detail="failed: $grand_failed"
+  elif [ "$pkg_failed" -ne 0 ]; then
+    # T0r167 F1：包级失败（构建错误 / failed≠0）必须判 FAIL
+    verdict="FAIL"; detail="包级失败: $pkg_failed（rc≠0 或 failed≠0，非目标门控跳过）"
   elif [ "$src_total" -eq 0 ]; then
     verdict="FAIL"; detail="未发现任何测试源"
   else

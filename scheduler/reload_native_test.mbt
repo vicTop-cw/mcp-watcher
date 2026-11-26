@@ -16,9 +16,9 @@ fn mk_rule_ep01d(id : String) -> @config.Rule {
 ///|
 fn ep01d_cfg(rules_body : String) -> String {
   "{\"schema_version\":1,\"watch_id\":\"ep01d\",\"watch_dir\":\".\"," +
-    "\"rules\":" +
-    rules_body +
-    ",\"allowed_programs\":[\"echo\"]}"
+  "\"rules\":" +
+  rules_body +
+  ",\"allowed_programs\":[\"echo\"]}"
 }
 
 ///|
@@ -30,8 +30,7 @@ fn ep01d_ev(tmp : String) -> @watch.FsEvent {
 test "验收: 规则文件 1→2 规则 → internal 通道 reload → 规则表热切换" {
   @rx.install_real_clock()
   let tmp = "tests/harness/.ep01d-reload.json"
-  let r1 =
-    "{\"id\":\"r1\",\"events\":[\"create\"],\"patterns\":[\"*.tmp\"]," +
+  let r1 = "{\"id\":\"r1\",\"events\":[\"create\"],\"patterns\":[\"*.tmp\"]," +
     "\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"a\"]}]}"
   match @mon.fs_write_atomic(tmp, ep01d_cfg("[" + r1 + "]")) {
     Err(_) => assert_true(false)
@@ -40,7 +39,10 @@ test "验收: 规则文件 1→2 规则 → internal 通道 reload → 规则表
   // 初始规则表：1 条（daemon 启动时加载的形态）
   let rules_ref = Ref::Ref([mk_rule_ep01d("r1")])
   let state = @scheduler.WatcherState::new(
-    tmp, "ep01d", ".", rules_ref=Some(rules_ref),
+    tmp,
+    "ep01d",
+    ".",
+    rules_ref=Some(rules_ref),
   )
   let reg = @scheduler.build_internal_registry(state)
   let log : Ref[Array[String]] = Ref::Ref([])
@@ -52,8 +54,7 @@ test "验收: 规则文件 1→2 规则 → internal 通道 reload → 规则表
   assert_true(log.val[0].contains("ok"))
 
   // 2) 文件改为 2 规则 → 触发 → 新规则生效（验收核心）
-  let r2 =
-    "{\"id\":\"r2\",\"events\":[\"modify\"],\"patterns\":[\"*.log\"]," +
+  let r2 = "{\"id\":\"r2\",\"events\":[\"modify\"],\"patterns\":[\"*.log\"]," +
     "\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"b\"]}]}"
   match @mon.fs_write_atomic(tmp, ep01d_cfg("[" + r1 + ", " + r2 + "]")) {
     Err(_) => assert_true(false)
@@ -80,8 +81,7 @@ test "验收: 规则文件 1→2 规则 → internal 通道 reload → 规则表
 test "op: 带 rules_ref 的 reload_config → 回执消息含「热切换」标注" {
   @rx.install_real_clock()
   let tmp = "tests/harness/.ep01d-opmsg.json"
-  let r1 =
-    "{\"id\":\"r1\",\"events\":[\"create\"],\"patterns\":[\"*.tmp\"]," +
+  let r1 = "{\"id\":\"r1\",\"events\":[\"create\"],\"patterns\":[\"*.tmp\"]," +
     "\"actions\":[{\"kind\":\"command\",\"argv\":[\"echo\",\"a\"]}]}"
   match @mon.fs_write_atomic(tmp, ep01d_cfg("[" + r1 + "]")) {
     Err(_) => assert_true(false)
@@ -89,7 +89,10 @@ test "op: 带 rules_ref 的 reload_config → 回执消息含「热切换」标�
   }
   let rules_ref = Ref::Ref([mk_rule_ep01d("r0")])
   let state = @scheduler.WatcherState::new(
-    tmp, "ep01d", ".", rules_ref=Some(rules_ref),
+    tmp,
+    "ep01d",
+    ".",
+    rules_ref=Some(rules_ref),
   )
   let reg = @scheduler.build_internal_registry(state)
   let mut got = false

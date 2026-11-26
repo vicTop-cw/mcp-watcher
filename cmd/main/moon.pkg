@@ -23,5 +23,7 @@ pkgtype(kind: "executable")
 supported_targets = "native"
 
 options(
+  // 最终可执行文件直接链接 sqlite 导入库（MoonBit 不跨包传播 link flags）
+  link: { "native": { "cc-link-flags": "sqlite/vendor/sqlite3.lib" } },
   "allow-experimental-packages": [ "moonbitlang/core/async" ],
 )

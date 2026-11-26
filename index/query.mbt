@@ -2,9 +2,8 @@
 ///
 /// 关键词策略：FTS5 MATCH 命中 + path LIKE '%kw%' 兜底（CJK 分词局限，并集去重）；
 ///   过滤条件（type/ext/size/mtime）全部 AND 拼接，参数化 bind。
-use @sqlite
 
-pub struct SearchOptions {
+pub(all) struct SearchOptions {
   keyword : String
   node_type : String // "file" | "dir" | "" 不限
   ext : String // 小写，不含点
@@ -64,38 +63,38 @@ fn int64_col(st : @sqlite.Statement, idx : Int) -> Int64 {
 /// 构造查询 SQL 与参数
 fn build_sql(opts : SearchOptions) -> (String, Array[@sqlite.SqlValue]) {
   let binds : Array[@sqlite.SqlValue] = []
-  var where : Array[String] = []
+  let conditions : Array[String] = []
   if opts.keyword != "" {
     // FTS5 MATCH（参数化）
-    where.push("(rowid IN (SELECT rowid FROM fs_fts WHERE fs_fts MATCH ?) OR path LIKE ?)")
-    binds.push(@sqlite.SqlValue::Text(fts_query(opts.keyword).as_bytes()))
-    binds.push(@sqlite.SqlValue::Text(("%" + opts.keyword + "%").as_bytes()))
+    conditions.push("(rowid IN (SELECT rowid FROM fs_fts WHERE fs_fts MATCH ?) OR path LIKE ?)")
+    binds.push(@sqlite.SqlValue::Text(@utf8.encode(fts_query(opts.keyword))))
+    binds.push(@sqlite.SqlValue::Text(@utf8.encode("%" + opts.keyword + "%")))
   }
   if opts.node_type != "" {
-    where.push("type = ?")
-    binds.push(@sqlite.SqlValue::Text(opts.node_type.as_bytes()))
+    conditions.push("type = ?")
+    binds.push(@sqlite.SqlValue::Text(@utf8.encode(opts.node_type)))
   }
   if opts.ext != "" {
-    where.push("ext = ?")
-    binds.push(@sqlite.SqlValue::Text(opts.ext.as_bytes()))
+    conditions.push("ext = ?")
+    binds.push(@sqlite.SqlValue::Text(@utf8.encode(opts.ext)))
   }
   if opts.min_size > 0L {
-    where.push("size >= ?")
+    conditions.push("size >= ?")
     binds.push(@sqlite.SqlValue::Int64(opts.min_size))
   }
   if opts.max_size > 0L {
-    where.push("size <= ?")
+    conditions.push("size <= ?")
     binds.push(@sqlite.SqlValue::Int64(opts.max_size))
   }
   if opts.mtime_after > 0L {
-    where.push("mtime >= ?")
+    conditions.push("mtime >= ?")
     binds.push(@sqlite.SqlValue::Int64(opts.mtime_after))
   }
   if opts.mtime_before > 0L {
-    where.push("mtime <= ?")
+    conditions.push("mtime <= ?")
     binds.push(@sqlite.SqlValue::Int64(opts.mtime_before))
   }
-  let where_sql = if where.length() == 0 { "1=1" } else { where.join(" AND ") }
+  let where_sql = if conditions.length() == 0 { "1=1" } else { conditions.join(" AND ") }
   let limit = if opts.limit <= 0 { -1 } else { opts.limit }
   binds.push(@sqlite.SqlValue::Int(limit))
   let sql = "SELECT rowid, path, rel_path, parent, depth, type, size, mtime, ctime, ext FROM fs_nodes WHERE " + where_sql + " ORDER BY path LIMIT ?"
@@ -103,19 +102,27 @@ fn build_sql(opts : SearchOptions) -> (String, Array[@sqlite.SqlValue]) {
 }
 
 /// FTS5 查询串：按空白拆 token，每 token 双引号包裹（短语），AND 连接；
-///   token 内双引号替换为空格（防语法注入）。
-fn fts_query(kw : String) -> String {
+///   token 内双引号**全部**替换为空格（防语法注入）；清洗后全空 → 合法
+///   空短语（FTS5 匹配零行，不产生 "unterminated string" 畸形表达式）。
+pub fn fts_query(kw : String) -> String {
   let tokens = kw.split(" ")
   let parts : Array[String] = []
-  for t in tokens {
-    let clean = t.replace("\"", " ")
-    let trimmed = clean.trim()
+  for tv in tokens {
+    let t = tv.to_owned()
+    // T0r167 F2：replace（单数）只替换首个匹配，多引号 token 残留引号 →
+    // 畸形 FTS5 表达式；必须 replace_all 全量清洗
+    let clean = t.replace_all(old="\"", new=" ")
+    let trimmed = clean.trim().to_owned()
     if trimmed != "" {
       parts.push("\"" + trimmed + "\"")
     }
   }
   if parts.length() == 0 {
-    "\"" + kw + "\""
+    // T0r167 F2：清洗后 keyword 为空（纯引号 / 纯空白）→ 合法空短语
+    //（FTS5 匹配零行，不产生 "unterminated string" 畸形表达式）；
+    // 原始 keyword 的**字面**匹配由 build_sql 的 LIKE '%kw%' 兜底承担。
+    // parts 为空 ⟺ 每个 token 清洗后皆空，故此处无需再触碰 kw。
+    "\"\""
   } else {
     parts.join(" AND ")
   }

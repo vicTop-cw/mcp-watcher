@@ -334,7 +334,7 @@ walk 采用**显式栈**递归（避免深目录栈溢出），顺序：
 | 机制 | 说明 |
 |------|------|
 | `meta` 断点 | walk 按目录分批提交；每批结束后写 `meta.walk_state = last_dir` |
-| 增量校验 | 已有库时（`fs_nodes` 非空），启动 walk 前先 `SELECT count(*)` 对比 `meta.walk_state`；若为"完成"态则跳过全量、直接进入增量（增量自举：以 mtime 段补扫，P0 提供 `--rebuild-index` 强制全量） |
+| 增量校验 | 已有库时（`fs_nodes` 非空），启动 walk 前先 `SELECT count(*)` 对比 `meta.walk_state`；若为"完成"态则跳过全量、直接进入增量（增量自举：以 mtime 段补扫；重建通过删除库文件后重启服务触发全量 walk） |
 | 幂等 | insert 使用 `INSERT OR REPLACE`（按 path 主键），中断重跑不产生重复节点 |
 
 ### 5.3 事件增量管线
@@ -357,7 +357,7 @@ walk 采用**显式栈**递归（避免深目录栈溢出），顺序：
 ### 5.4 同步可靠性
 
 - **事务**：每个事件（或一批去抖合并事件）在一个事务内完成 upsert/delete/rename；失败 ROLLBACK，错误计数 +1 并记录诊断日志，不中断事件流。
-- **错误计数**：`meta.error_count` 与最近错误文本，`status` 可查；超阈值（P0 默认 100）输出告警，提示 `--rebuild-index`。
+- **错误计数**：`meta.error_count` 与最近错误文本，`status` 可查；超阈值（P0 默认 100）输出告警，提示删除库文件后重启服务。
 - **顺序**：同一路径事件按到达顺序应用；rename 依赖 create 先行的场景由 `INSERT OR REPLACE` 幂等兜底。
 
 
@@ -418,7 +418,7 @@ ORDER BY path LIMIT ?;
 |----|------|
 | 0 | 查询成功（可无命中） |
 | 1 | 参数错误 / 配置校验失败 |
-| 2 | 索引未启用 / 库不存在 / 库损坏（提示 `--rebuild-index`） |
+| 2 | 索引未启用 / 库不存在 / 库损坏 |
 
 ### 6.4 测试覆盖
 
@@ -450,7 +450,7 @@ ORDER BY path LIMIT ?;
 |------|--------|------|
 | 缺陷修复（方案 B） | 多根 watch 合并；`subscribe_watch` 支持多根 | 双目录探针：A/B 事件均到达；既有场景回归全绿 |
 | `index` 包骨架 + SQLite 接入 | `db.mbt` / `schema.mbt`；建库 DDL | 建库单测：表/索引/FTS/触发器存在 |
-| 全量 walk 建库 | `walk.mbt`；断点/增量校验；`--rebuild-index` | walk 单测：层级/排除/防自噬；断点续传用例 |
+| 全量 walk 建库 | `walk.mbt`；断点/增量校验；删除库文件后重启服务触发全量 | walk 单测：层级/排除/防自噬；断点续传用例 |
 | 事件增量管线 | `upsert.mbt`；create/modify/delete/rename 分流 | 增量单测 + harness 双进程：改文件后库同步 |
 | 排除与防自噬 | `exclude.mbt`；内置排除 + db_path 防自噬 | 防自噬用例：索引库文件不进入自身索引 |
 | CLI search | `search` 子命令 + `query.mbt` | search 关键词/过滤/格式/退出码用例 |
@@ -481,7 +481,7 @@ ORDER BY path LIMIT ?;
 | 索引库自噬 | db_path 落在 watch_dir 内，事件/ walk 扫到库文件 | 索引库被自身索引 → 递归膨胀 | 硬编码防自噬排除（§3.4）+ 单测守护 |
 | SQLite 依赖引入 | native 需 SQLite FFI、js 需 sql.js | 新依赖面 | P0 先 native 全量；js 目标 `index` 降级占位（`enabled=true` 报 Unsupported 或走 sql.js，P0 评估后定）；依赖锁定版本并纳入门禁 |
 | rename 竞态 | 目录 rename 与子事件乱序到达 | 索引不一致 | 单事务 + 幂等 upsert + 错误计数提示重建 |
-| 全量 walk 耗时 | 超大目录 | 启动慢 | 断点续传 + 分批事务 + `--rebuild-index` 可控重跑 |
+| 全量 walk 耗时 | 超大目录 | 启动慢 | 断点续传 + 分批事务 + 删库重启可控重跑 |
 | index 配置热切换 | reload 变更 enabled/db_path | 运行中重建库竞态 | P0 明确 reload 不支持 index 热切换，提示重启生效（§4.3） |
 
 

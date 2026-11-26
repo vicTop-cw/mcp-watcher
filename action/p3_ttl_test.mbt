@@ -73,8 +73,9 @@ test "cleanup_expired：到期记录被移除并返回计数" {
   let tracker : @action.ProductTracker = {
     records: [mk_record("old.tmp", 120L, 60), mk_record("fresh.tmp", 1L, 60)],
   }
-  let (cleaned, remaining) = tracker.cleanup_expired("/tmp")
+  let (cleaned, remaining, expired) = tracker.cleanup_expired("/tmp")
   assert_eq(cleaned, 1)
+  assert_eq(expired[0].path, "old.tmp")
   assert_eq(remaining.records.length(), 1)
   assert_eq(remaining.records[0].path, "fresh.tmp")
 }

@@ -8,11 +8,17 @@ import {
   "moonbitlang/core/string",
   "moonbitlang/core/encoding/utf8" @utf8,
   "moonbitlang/core/debug",
+  "moonbitlang/core/env",
+  "moonbitlang/async/fs" @fs,
+  "moonbitlang/core/async",
 }
 
 options(
   "native-stub": [ "fs_stub.c" ],
+  // 依赖 sqlite 的最终可执行文件需各自带上导入库（MoonBit 不跨包传播 link flags）
+  link: { "native": { "cc-link-flags": "sqlite/vendor/sqlite3.lib" } },
   targets: {
     "index_native_test.mbt": [ "native" ],
   },
+  "allow-experimental-packages": [ "moonbitlang/core/async" ],
 )

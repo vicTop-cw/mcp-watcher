@@ -7,8 +7,6 @@
 ///   rename  -> 事件流未暴露 old/new（rx 将 rename 映射为 Removed(old)+Created(new)），
 ///              由 delete+upsert 幂等覆盖；rename_node 单事务迁移供未来事件源/测试使用
 /// 同步可靠性（§5.4）：单事件单事务；失败 ROLLBACK + 错误计数，不中断事件流。
-use @watch
-use @config
 
 /// 应用单个文件事件
 pub fn apply_event(h : IndexHandle, ev : @watch.FsEvent) -> Unit {

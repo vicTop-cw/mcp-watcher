@@ -1,5 +1,4 @@
 /// SQLite 连接管理、事务封装与 meta 表读写（vector-index-design §3.1 / §5）
-use @sqlite
 
 /// 打开（或创建）SQLite 库；失败返回 None（调用方按"索引旁路降级"处理）
 pub fn open(path : String) -> @sqlite.Database? {
@@ -25,9 +24,9 @@ pub fn get_meta(db : @sqlite.Database, key : String) -> String? {
     return None
   }
   let st = stmt.unwrap()
-  let _ = st.bind(1, @sqlite.SqlValue::Text(key.as_bytes()))
+  let _ = st.bind(1, @sqlite.SqlValue::Text(@utf8.encode(key)))
   if st.step() {
-    let v = bytes_to_str(st.column_text(0))
+    let v = db_bytes_to_str(st.column_text(0))
     st.finalize()
     Some(v)
   } else {
@@ -43,8 +42,8 @@ pub fn set_meta(db : @sqlite.Database, key : String, value : String) -> Unit {
     return
   }
   let st = stmt.unwrap()
-  let _ = st.bind(1, @sqlite.SqlValue::Text(key.as_bytes()))
-  let _ = st.bind(2, @sqlite.SqlValue::Text(value.as_bytes()))
+  let _ = st.bind(1, @sqlite.SqlValue::Text(@utf8.encode(key)))
+  let _ = st.bind(2, @sqlite.SqlValue::Text(@utf8.encode(value)))
   let _ = st.execute()
   st.finalize()
 }
@@ -52,7 +51,7 @@ pub fn set_meta(db : @sqlite.Database, key : String, value : String) -> Unit {
 /// 错误计数 +1 并记录最近错误文本
 pub fn record_error(db : @sqlite.Database, msg : String) -> Unit {
   let cur = get_meta(db, "error_count")
-  let n = if cur is None { 0 } else { parse_int64(cur.unwrap()).unwrap_or(0L) }
+  let n = if cur is None { 0L } else { parse_int64(cur.unwrap()).unwrap_or(0L) }
   set_meta(db, "error_count", (n + 1L).to_string())
   set_meta(db, "last_error", msg)
 }
@@ -83,16 +82,14 @@ pub fn node_count(db : @sqlite.Database) -> Int64 {
   }
 }
 
-/// Bytes -> UTF-8 String（照 sqlite 包测试的 decode 方式）
-fn bytes_to_str(b : Bytes) -> String {
-  let sb = @string.StringBuilder::new()
-  let _ = @encoding.decode_to(b[:], sb, encoding=UTF8) catch { _ => () }
-  sb.to_string()
+/// Bytes -> UTF-8 String（与 upsert.mbt 的同名辅助区分）
+fn db_bytes_to_str(b : Bytes) -> String {
+  @utf8.decode_lossy(b)
 }
 
 fn parse_int64(s : String) -> Int64? {
   // MoonBit 无直接 to_int64? 解析；用 debug/捕获 fallback 简单实现
-  let b = s.as_bytes()
+  let b = @utf8.encode(s)
   if b.length() == 0 {
     return None
   }

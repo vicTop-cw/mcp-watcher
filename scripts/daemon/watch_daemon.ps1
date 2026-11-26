@@ -5,7 +5,22 @@
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root      = [System.IO.Path]::GetFullPath((Join-Path $scriptDir "..\.."))
-$main      = Join-Path $root "_build\js\debug\build\cmd\main\main.js"
+# Build output lives at the workspace root _build (moon workspace root),
+# not under mcp-watcher; keep a fallback to the repo-local path just in case.
+$main = Join-Path $root "..\_build\js\debug\build\cmd\main\main.js"
+if (-not (Test-Path $main)) {
+    $main = Join-Path $root "_build\js\debug\build\cmd\main\main.js"
+}
+$main = [System.IO.Path]::GetFullPath($main)
+if (-not (Test-Path $main)) {
+    # No build output: exit silently instead of spawning a doomed node process.
+    exit 1
+}
+$rules = Join-Path $root ".mcp-watch.json"
+if (-not (Test-Path $rules)) {
+    # No rules file in this repo: nothing to watch; exit silently (no doomed spawn).
+    exit 0
+}
 $tempDir   = Join-Path $root "temp"
 $pidFile   = Join-Path $tempDir "wt-daemon.pid"
 $logFile   = Join-Path $tempDir "wt-daemon.log"
@@ -20,7 +35,7 @@ if (Test-Path $pidFile) {
 }
 $argList = @(
     $main, "run",
-    "--rules", (Join-Path $root ".mcp-watch.json"),
+    "--rules", $rules,
     "--watch-dir", $root,
     "--debounce-ms", "0"
 )
