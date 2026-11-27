@@ -103,7 +103,7 @@ test "loader: 解析完整 webhook 动作（url/method/headers/timeout/body）" 
         _ => assert_true(false)
       }
     }
-    Err(e) => assert_true(false)
+    Err(_) => assert_true(false)
   }
 }
 

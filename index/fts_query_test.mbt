@@ -13,27 +13,27 @@
 // ============================================================================
 
 test "fts_query: 普通关键词 → 引号短语 + AND" {
-  assert_true(fts_query("hello") == "\"hello\"")
-  assert_true(fts_query("a b") == "\"a\" AND \"b\"")
+  assert_true(@index.fts_query("hello") == "\"hello\"")
+  assert_true(@index.fts_query("a b") == "\"a\" AND \"b\"")
 }
 
 test "fts_query: token 内双引号被清洗（防注入）" {
-  assert_true(fts_query("a\"b c") == "\"a b\" AND \"c\"")
+  assert_true(@index.fts_query("a\"b c") == "\"a b\" AND \"c\"")
 }
 
 test "fts_query: 纯引号关键词（奇数）→ 合法空短语，不再畸形" {
   // 1 / 3 / 5 个引号：原实现分别产出 3 / 5 / 7 个引号（奇数，
   // FTS5 "unterminated string"，实测 sqlite 3.50.4/3.54.1 同款行为）
-  assert_true(fts_query("\"") == "\"\"")
-  assert_true(fts_query("\"\"\"") == "\"\"")
-  assert_true(fts_query("\"\"\"\"\"") == "\"\"")
+  assert_true(@index.fts_query("\"") == "\"\"")
+  assert_true(@index.fts_query("\"\"\"") == "\"\"")
+  assert_true(@index.fts_query("\"\"\"\"\"") == "\"\"")
 }
 
 test "fts_query: 纯引号关键词（偶数）→ 同样降级为空短语" {
-  assert_true(fts_query("\"\"") == "\"\"")
+  assert_true(@index.fts_query("\"\"") == "\"\"")
 }
 
 test "fts_query: 空白 / 空白+引号 → 空短语" {
-  assert_true(fts_query("   ") == "\"\"")
-  assert_true(fts_query(" \" \" ") == "\"\"")
+  assert_true(@index.fts_query("   ") == "\"\"")
+  assert_true(@index.fts_query(" \" \" ") == "\"\"")
 }

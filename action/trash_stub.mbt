@@ -13,7 +13,7 @@ pub const TRASH_DIR_NAME = ".mcp-watcher-trash"
 
 ///|
 /// trash 降级：不删、不移文件，返回可诊断的 Err（明确"当前目标不支持"）。
-pub async fn trash_file(path : String, watch_dir : String) -> Result[Unit, String] {
+pub fn trash_file(path : String, watch_dir : String) -> Result[Unit, String] {
   let _ = path
   let _ = watch_dir
   Err("trash 物理回收在当前目标不可用（需 native fs API）：已降级为逻辑过期")

@@ -22,7 +22,7 @@ pub fn search(db : @sqlite.Database, opts : SearchOptions) -> Array[Node] {
     return []
   }
   let st = stmt.unwrap()
-  var i = 1
+  let mut i = 1
   for b in binds {
     let _ = st.bind(i, b)
     i = i + 1

@@ -10,7 +10,7 @@ pub struct WalkResult {
   files : Int64
 }
 
-struct WalkItem {
+priv struct WalkItem {
   dir : String
   rel : String
   depth : Int
@@ -45,8 +45,8 @@ pub fn full_walk(
     // 防自噬 / 排除在入栈时已检查；此处再查自身（watch_dir 本身不排除）
     let items = list_dir(d)
     for it in items {
-      let is_dir = it.ends_with("/")
-      let name = if is_dir { it.substring(start=0, end=it.length() - 1) } else { it }
+      let is_dir = it.has_suffix("/")
+      let name = if is_dir { it[0:it.length() - 1].to_owned() } else { it }
       let child = d + "/" + name
       let child_rel = if rel == "." { name } else { rel + "/" + name }
       if should_skip(cfg, db_path, child, child_rel, is_dir) {

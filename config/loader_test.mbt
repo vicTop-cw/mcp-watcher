@@ -427,7 +427,7 @@ test "acceptance: full field parse" {
         }
         None => assert_true(false)
       }
-    Err(e) => assert_true(false)
+    Err(_) => assert_true(false)
   }
 }
 
@@ -520,7 +520,7 @@ test "guard: full field parse" {
         }
         None => assert_true(false)
       }
-    Err(e) => assert_true(false)
+    Err(_) => assert_true(false)
   }
 }
 
@@ -627,7 +627,7 @@ test "internal: op and message parse" {
         None => assert_true(false)
       }
     }
-    Err(e) => assert_true(false) // e
+    Err(_) => assert_true(false) // 忽略错误值
   }
 }
 

@@ -487,7 +487,7 @@ pub fn ProductTracker::register(
   if ttl_seconds > 0 {
     let record = ProductRecord::{
       path,
-      created_at_ns: Int64::from_int(@rx.real_now().to_int()),
+      created_at_ns: @rx.real_now().to_int().to_int64(),
       ttl_seconds,
     }
     tracker.records.push(record)
@@ -508,7 +508,7 @@ pub fn ProductTracker::expired_records(
   for record in tracker.records {
     if record.ttl_seconds > 0 {
       let age_ns = now_ns - record.created_at_ns
-      let ttl_ns = Int64::from_int(record.ttl_seconds) * NS_PER_SECOND
+      let ttl_ns = record.ttl_seconds.to_int64() * NS_PER_SECOND
       if age_ns >= ttl_ns {
         out.push(record)
       }
@@ -605,7 +605,8 @@ pub fn ProductTracker::cleanup_expired(
   bus~ : @rx.EventBus[LifecycleEvent]? = None,
   events~ : Ref[Array[LifecycleEvent]] = Ref::Ref([]),
 ) -> (Int32, ProductTracker, Array[ProductRecord]) {
-  let now_ns = Int64::from_int(@rx.real_now().to_int())
+  let _ = watch_dir // watch_dir 由调用方用于后续 trash 回收，本函数不直接使用
+  let now_ns = @rx.real_now().to_int().to_int64()
   let expired = tracker.expired_records(now_ns)
   let remaining : Array[ProductRecord] = []
   for record in tracker.records {
@@ -636,6 +637,7 @@ pub fn ProductTracker::cleanup_expired(
 ///   - 回收失败 → **保留原文件**，只记可诊断错误日志（不谎报销毁、不吞错）。
 ///
 /// 返回：(到期数量, 剩余追踪器)；其中到期记录已由 `expired_records` 语义确定。
+#warnings("-unused_async")
 pub async fn ProductTracker::sweep_expired_to_trash(
   tracker : ProductTracker,
   watch_dir : String,
@@ -726,11 +728,11 @@ pub fn ProductTracker::load(path : String) -> ProductTracker {
           _ => continue
         }
         let created = match m.get("created_at_ns") {
-          Some(@json.Json::Number(n)) => Int64::from_int(n.to_int())
+          Some(@json.Json::Number(n, ..)) => n.to_int().to_int64()
           _ => continue
         }
         let ttl = match m.get("ttl_seconds") {
-          Some(@json.Json::Number(n)) => n.to_int()
+          Some(@json.Json::Number(n, ..)) => n.to_int()
           _ => continue
         }
         records.push(ProductRecord::{
@@ -781,7 +783,7 @@ pub fn LifecycleEvent::new(
   {
     kind,
     path,
-    timestamp_ns: Int64::from_int(@rx.real_now().to_int()),
+    timestamp_ns: @rx.real_now().to_int().to_int64(),
     message: "",
   }
 }
@@ -796,7 +798,7 @@ pub fn LifecycleEvent::new_with_message(
   {
     kind,
     path,
-    timestamp_ns: Int64::from_int(@rx.real_now().to_int()),
+    timestamp_ns: @rx.real_now().to_int().to_int64(),
     message,
   }
 }
@@ -1144,7 +1146,7 @@ pub fn run_action(
   tracked~ : Ref[ProductTracker] = Ref::Ref({ records: [] }),
 ) -> Result[ActionOutcome, String] {
   // 记录执行开始时间
-  let start_time_ns = Int64::from_int(@rx.real_now().to_int())
+  let start_time_ns = @rx.real_now().to_int().to_int64()
 
   let result = match spec.kind {
     "command" => {
@@ -1210,7 +1212,7 @@ pub fn run_action(
   }
 
   // 记录执行结束时间
-  let end_time_ns = Int64::from_int(@rx.real_now().to_int())
+  let end_time_ns = @rx.real_now().to_int().to_int64()
 
   // 如果日志启用，输出日志
   if logging_config.enabled {

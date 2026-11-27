@@ -9,7 +9,6 @@ import {
   "moonbitlang/async/fs" @fs,
   "moonbitlang/core/json",
   "moonbitlang/core/env",
-  "moonbitlang/core/ref",
   "moonbitlang/core/debug",
   "moonbitlang/core/async",
   "moonbitlang/core/encoding/utf8" @utf8,
@@ -31,6 +30,13 @@ options(
     // P3 生命周期验收：走 @mon C FFI + @fs，native 专属
     "p3_lifecycle_native_test.mbt": [ "native" ],
     "trash_stub.mbt": [ "js", "wasm" ],
+    // 产物加密密码臂按目标分轨（RX-MBT 的 AES-256-GCM 实现为 native / js 双轨门控）：
+    //   crypto_native.mbt → RhopCipherAesGcmNative（native）
+    //   crypto_js.mbt     → Aes256GcmCipher（js）
+    //   crypto_wasm.mbt   → 诚实降级（wasm / wasm-gc）
+    "crypto_native.mbt": [ "native" ],
+    "crypto_js.mbt": [ "js" ],
+    "crypto_wasm.mbt": [ "wasm", "wasm-gc" ],
     // EP-01b webhook：js 目标真实 HTTP e2e / native 目标诚实降级
     "webhook_js_test.mbt": [ "js" ],
     "webhook_native_test.mbt": [ "native" ],

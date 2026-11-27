@@ -86,7 +86,7 @@ fn parent_path(path : String) -> String? {
       if i <= 0 {
         None
       } else {
-        Some(p.substring(start=0, end=i))
+        Some(p[0:i].to_owned())
       }
     }
   }

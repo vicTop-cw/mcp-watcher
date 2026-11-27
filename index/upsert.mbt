@@ -81,11 +81,7 @@ pub fn upsert_node(
 ) -> Int64 {
   // 旧 rowid（保持稳定，避免 fts 残留）
   let old_rowid = rowid_of(db, path)
-  var rowid = 0L
-  let parent_sql = match parent {
-    Some(p) => p
-    None => ""
-  }
+  let mut rowid = 0L
   if old_rowid is Some(rowid_val) {
     let stmt = db.prepare(
       "INSERT OR REPLACE INTO fs_nodes(rowid, path, rel_path, parent, depth, type, size, mtime, ctime, ext) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -216,12 +212,11 @@ pub fn rename_node(
   let delta = depth_of(new) - depth_of(old)
   for r in rows {
     let oldp = r.0
-    let rel = r.1
     let depth = r.2
     let suffix = if oldp == old {
       ""
     } else {
-      oldp.substring(start=old.length(), end=oldp.length())
+      oldp[old.length():oldp.length()].to_owned()
     }
     let newp = new + suffix
     // parent 需要重算：newp 的父目录 = 上一级路径；直接按段截取
@@ -263,8 +258,8 @@ fn walk_subtree(
 ) -> Unit {
   let items = list_dir(dir)
   for item in items {
-    let is_dir = item.ends_with("/")
-    let name = if is_dir { item.substring(start=0, end=item.length() - 1) } else { item }
+    let is_dir = item.has_suffix("/")
+    let name = if is_dir { item[0:item.length() - 1].to_owned() } else { item }
     let child = normalize_slash(dir) + "/" + name
     let child_rel = if rel == "." { name } else { rel + "/" + name }
     if should_skip(cfg, db_path, child, child_rel, is_dir) {
@@ -294,9 +289,9 @@ pub fn rel_of(watch_dir : String, path : String) -> String {
   if p == w {
     return "."
   }
-  if p.length() > w.length() && p.substring(start=0, end=w.length()) == w {
+  if p.length() > w.length() && p[0:w.length()].to_owned() == w {
     if p[w.length()] == '/' {
-      return p.substring(start=w.length() + 1, end=p.length())
+      return p[w.length() + 1:p.length()].to_owned()
     }
   }
   // watch_dir 外（如规则文件目录补监控）按绝对路径段转相对展示
@@ -313,7 +308,7 @@ fn parent_of(path : String) -> String? {
       if i <= 0 {
         None
       } else {
-        Some(p.substring(start=0, end=i))
+        Some(p[0:i].to_owned())
       }
     }
   }
@@ -329,7 +324,7 @@ fn ext_of(path : String) -> String {
       if i == 0 {
         ""
       } else {
-        leaf.substring(start=i + 1, end=leaf.length()).to_lower()
+        leaf[i + 1:leaf.length()].to_owned().to_lower()
       }
     }
   }

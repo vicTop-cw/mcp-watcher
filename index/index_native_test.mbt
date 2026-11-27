@@ -136,6 +136,23 @@ async test "apply_event: create modify delete keep index in sync" {
         @watch.FsEvent::new(@config.EventType::Modify, base + "/new.md", false, 0, 2),
       )
       assert_true(@index.node_count(h.db) == 2L)
+      // --- 临时诊断（跑完即删） ---
+      let mut diag = ""
+      let st_t = h.db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+      )
+      if st_t is Some(s) {
+        while s.step() {
+          diag = diag + bytes_to_str(s.column_text(1)) + "|"
+        }
+        s.finalize()
+      }
+      let (dsql, _db) = build_sql(mk_opts("new.md", "", "", 0L, 0L, 0))
+      let dprep = match h.db.prepare(dsql) {
+        Some(_) => "ok"
+        None => "prepare-none"
+      }
+      println("DIAG tables=" + diag + " prep=" + dprep + " sql=" + dsql)
       let hit = @index.search(h.db, mk_opts("new.md", "", "", 0L, 0L, 0))
       assert_true(hit.length() == 1)
       @index.apply_event(

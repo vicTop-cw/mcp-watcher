@@ -6,7 +6,7 @@
 /// 测试 ProductTracker 注册功能
 test "ProductTracker: register adds record" {
   let tracker = @action.ProductTracker::new()
-  let tracker = @action.ProductTracker::register(tracker, "/tmp/test.txt", 3600)
+  let _tracker = @action.ProductTracker::register(tracker, "/tmp/test.txt", 3600)
   // 注册成功，不报错
 }
 

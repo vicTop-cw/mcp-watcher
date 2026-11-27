@@ -34,18 +34,27 @@ pub trait WatchSource {
 
 ///|
 /// 占位后端（无 rx 监控能力的目标使用）
+#cfg(not(any(target="native", target="js")))
 pub struct PlaceholderBackend {}
 
 ///|
+#cfg(not(any(target="native", target="js")))
 pub extend PlaceholderBackend with WatchSource::{watch}
 
 ///|
+#cfg(not(any(target="native", target="js")))
 pub impl WatchSource for PlaceholderBackend with fn watch(
   self : PlaceholderBackend,
   path : String,
   recursive : Bool,
 ) -> Result[Unit, WatchError] {
-  let _ = (self, path, recursive)
+  let _ = (self, recursive)
+  // 走降级版 rx_probe_backend：构造一个立即 on_error 的 Observable，
+  // 既表达「当前目标无监控能力」，也让降级分支保持可达（避免死代码告警）。
+  let probe : @rx.Observable[@mon.WatchEvent, @mon.WatchError] = rx_probe_backend(
+    path,
+  )
+  let _ = probe
   Err(
     WatchError::Unsupported(
       "watch 后端在当前目标不可用（rx monitor 仅提供 js / native 后端）",
@@ -55,12 +64,15 @@ pub impl WatchSource for PlaceholderBackend with fn watch(
 
 ///|
 /// rx 后端：委托给 rx monitor 的事件驱动实现
+#cfg(any(target="native", target="js"))
 pub struct RxBackend {}
 
 ///|
+#cfg(any(target="native", target="js"))
 pub extend RxBackend with WatchSource::{watch}
 
 ///|
+#cfg(any(target="native", target="js"))
 pub impl WatchSource for RxBackend with fn watch(
   self : RxBackend,
   path : String,

@@ -35,9 +35,15 @@ fn resolve_password(key : String?) -> String {
 }
 
 ///|
-/// 新建密码臂（PBKDF2-100000 惰性派生一次；同一实例复用以避免重复 1–2s 派生）
-fn make_cipher(password : String) -> @rhop.RhopCipherAesGcmNative {
-  @rhop.RhopCipherAesGcmNative::new(password)
+/// 新建密码臂：按编译目标分派到具体实现（trait object，统一 `RhopCipher` 视角）
+///
+/// RX-MBT 的 AES-256-GCM 实现按目标分轨（0.5.1 同构，均为目标门控文件）：
+///   - native：`rhop.RhopCipherAesGcmNative`（纯 MoonBit，rhop/cipher_gcm.mbt，仅 native）
+///   - js    ：`rhop.Aes256GcmCipher`（node:crypto，rhop/rhop_js.mbt，仅 js）
+///   - wasm  ：无实现，返回可诊断 Err（诚实降级，不伪造密文）
+/// 具体实现在 crypto_native.mbt / crypto_js.mbt / crypto_wasm.mbt 三个门控文件中。
+fn make_cipher(password : String) -> Result[&@rhop.RhopCipher, String] {
+  cipher_impl(password)
 }
 
 ///|
@@ -54,7 +60,10 @@ pub fn encrypt_text(
   plain : String,
   key : String?,
 ) -> Result[String, String] {
-  let cipher = make_cipher(resolve_password(key))
+  let cipher = match make_cipher(resolve_password(key)) {
+    Err(e) => return Err("产物加密失败：" + e)
+    Ok(c) => c
+  }
   let token = cipher.encrypt(plain)
   if token == "" {
     return Err("产物加密失败：密码臂返回空 token")
@@ -71,8 +80,11 @@ pub fn decrypt_text(ciphertext : String, key : String?) -> Result[String, String
     return Err("产物解密失败：不是 mcp-watcher 密文格式（缺少 MBPWCRYPT1 前缀）")
   }
   let n = CRYPT_PREFIX.length()
-  let token = ciphertext[n:].to_string()
-  let cipher = make_cipher(resolve_password(key))
+  let token = ciphertext[n:].to_owned()
+  let cipher = match make_cipher(resolve_password(key)) {
+    Err(e) => return Err("产物解密失败：" + e)
+    Ok(c) => c
+  }
   match cipher.decrypt(token) {
     None => Err("产物解密失败：tag 校验不过（错误密钥 / 密文被篡改 / 形态非法）")
     Some(plain) => Ok(plain)
@@ -95,7 +107,7 @@ pub fn encrypt_file(path : String, key : String?) -> Result[Int64, String] {
   }
   match @mon.fs_write_atomic(path, ct) {
     Err(e) => Err("产物加密写入失败: " + fs_error_text_local(e))
-    Ok(_) => Ok(Int64::from_int(ct.length()))
+    Ok(_) => Ok(ct.length().to_int64())
   }
 }
 
@@ -114,6 +126,6 @@ pub fn decrypt_file(path : String, key : String?) -> Result[Int64, String] {
   }
   match @mon.fs_write_atomic(path, plain) {
     Err(e) => Err("产物解密写入失败: " + fs_error_text_local(e))
-    Ok(_) => Ok(Int64::from_int(plain.length()))
+    Ok(_) => Ok(plain.length().to_int64())
   }
 }

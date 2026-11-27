@@ -168,11 +168,11 @@ pub fn Logger::log_trigger(
   event_type : String,
   actions_count : Int32,
 ) -> RuleTriggerLog {
-  let now_ns = Int64::from_int(@rx.real_now().to_int())
+  let now_ns = @rx.real_now().to_int().to_int64()
   let log = RuleTriggerLog::new(rule_id, event_path, event_type, now_ns, actions_count)
   // 如果日志启用，添加到缓冲区
   if self.config.enabled {
-    let mut new_buffer = self.buffer.clone()
+    let mut new_buffer = self.buffer.copy()
     new_buffer.push(log)
     // 检查缓冲区大小，触发轮转
     if new_buffer.length() > self.max_buffer_size {
@@ -198,7 +198,7 @@ pub fn Logger::log_trigger(
 ///
 /// 返回：更新后的日志记录
 pub fn log_execution_start(log : RuleTriggerLog) -> RuleTriggerLog {
-  let now_ns = Int64::from_int(@rx.real_now().to_int())
+  let now_ns = @rx.real_now().to_int().to_int64()
   log.set_start_time(now_ns)
 }
 
@@ -216,7 +216,7 @@ pub fn log_execution_end(
   status : String,
   result_summary : String,
 ) -> RuleTriggerLog {
-  let now_ns = Int64::from_int(@rx.real_now().to_int())
+  let now_ns = @rx.real_now().to_int().to_int64()
   log.set_end_time(now_ns, status, result_summary)
 }
 

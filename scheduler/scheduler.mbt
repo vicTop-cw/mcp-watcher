@@ -851,7 +851,7 @@ pub fn dir_covers(outer : String, inner : String) -> Bool {
     true
   } else if o == i2 {
     true
-  } else if i2.starts_with(o + "/") {
+  } else if i2.has_prefix(o + "/") {
     true
   } else {
     false

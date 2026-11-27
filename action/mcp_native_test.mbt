@@ -52,7 +52,7 @@ test "mcp native: run_action 的 mcp 分支返回 Err（诚实降级）" {
 
 ///|
 test "mcp 全目标: sse/http transport 未实现 → 可诊断 Err（v1 仅 stdio）" {
-  let spec = @config.ActionSpec::new_mcp(
+  let _spec = @config.ActionSpec::new_mcp(
     "node",
     "publish",
     None,

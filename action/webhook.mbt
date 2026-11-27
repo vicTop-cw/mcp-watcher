@@ -31,7 +31,7 @@ const HTTP_STATUS_OK_EXCLUSIVE_MAX = 300
 /// 构造 HTTP 桥请求 JSON（字段顺序与键名与 ffi 桥契约逐位一致）
 pub fn webhook_request_json(
   url : String,
-  method : String,
+  http_method : String,
   headers_json : String?,
   body : String?,
   timeout_ms : Int32,
@@ -45,7 +45,7 @@ pub fn webhook_request_json(
     None => ""
   }
   "{\"method\":\"" +
-    escape_json_string(method) +
+    escape_json_string(http_method) +
     "\",\"url\":\"" +
     escape_json_string(url) +
     "\",\"headers\":" +

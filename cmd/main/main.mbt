@@ -518,7 +518,7 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
     // EP-01d：真实时钟驱动——rx 时间算子（debounce_real / timer）在真实
     // 时钟安装**并被驱动**后才按真实时间运行；缺驱动则 watch 防抖永不
     // 触发（潜在缺陷顺带修复）
-    let _ = group.spawn(fn() {
+    let _ = group.spawn(async fn() {
       @rx.drive_real_clock(CLOCK_DRIVE_INTERVAL_MS)
     })
     // ⚠️ 方案 B（vector-index-design §2）：规则文件目录 + watch_dir 合并为
@@ -533,7 +533,7 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
       roots.push(rules_dir)
       println("  规则文件在主监控目录外，已并入监控根：" + rules_dir)
     }
-    let _ = group.spawn(fn() {
+    let _ = group.spawn(async fn() {
       @watch.spawn_watch_task_multi(
         roots, cfg.recursive, bus,
         debounce_ms=cfg.debounce_ms.to_int64(),
@@ -543,7 +543,7 @@ pub async fn run_daemon(cfg : @config.Config, args : CliArgs) -> Unit {
     // P3：TTL 到期清扫任务——按真实时间周期扫追踪表，把到期产物移入
     // `<watch_dir>/.mcp-watcher-trash/<时间戳>/`（可恢复），并即时持久化
     // 剩余追踪表（重启不丢）。与真实时钟驱动任务并行，互不影响。
-    let _ = group.spawn(fn() {
+    let _ = group.spawn(async fn() -> Unit {
       for ;; {
         @async.sleep(TTL_SWEEP_INTERVAL_MS.to_int())
         let (count, remaining) = tracker_ref.val.sweep_expired_to_trash(
@@ -1088,7 +1088,7 @@ fn truncate_path(p : String, max : Int) -> String {
   if p.length() <= max {
     p
   } else {
-    p.substring(start=0, end=max - 3) + "..."
+    p[:max - 3].to_owned() + "..."
   }
 }
 
@@ -1230,10 +1230,10 @@ async fn cmd_run_once(args : CliArgs) -> Unit {
   @async.with_task_group(fn(group : @async.TaskGroup) {
     // EP-02a：真实时钟驱动——缺驱动则 debounce_real/interval 等时间算子
     // 挂在虚拟时钟上永不触发（与 run_daemon 同款接线，EP-01d 首立）
-    let _ = group.spawn(fn() {
+    let _ = group.spawn(async fn() {
       @rx.drive_real_clock(CLOCK_DRIVE_INTERVAL_MS)
     })
-    let _ = group.spawn(fn() {
+    let _ = group.spawn(async fn() {
       @watch.spawn_watch_task(
         watch_dir,
         cfg.recursive,

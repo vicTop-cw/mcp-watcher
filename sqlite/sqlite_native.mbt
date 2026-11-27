@@ -581,5 +581,5 @@ pub fn Statement::finalize(self : Statement) -> Unit {
 ///|
 pub fn Statement::iter(self : Statement) -> Iter[Statement] {
   self.reset()
-  Iter::new(fn() { if self.step() { Some(self) } else { None } })
+  Iter(fn() { if self.step() { Some(self) } else { None } })
 }

@@ -2,6 +2,19 @@
 
 版本约定：`moon.mod` / `util/version.mbt`（`APP_VERSION`）/ 本文件三处同步。
 
+## v0.2.5 — 2026-11-27（MoonBit 1.0rc 工具链适配发布）
+
+### Changed
+
+- **依赖升级（1.0rc 工具链适配）**：`moonbitlang/async@0.22.9 → 0.22.11`
+  （当日发布的 1.0rc 适配版；`moonbitlang/async/fs` 子包仍供 native 的
+  mkdir/rename 用）、`moonbitlang/x@0.5.5 → 0.5.9`、
+  `vicTop-cw/RX-MBT@0.4.6 → 0.5.1`（其 1.0rc 适配：envelope 深度契约显式
+  自守 + async 依赖迁 core，API 面不变）。
+- **源码零改动**：全门禁在 1.0rc 工具链下复跑全绿——check 0 errors；
+  native / js / wasm 三目标各 322 例 failed 0；e2e basic / deny 双进程
+  场景 RESULT: PASS。
+
 ## v0.2.4 — 2026-11-27（bug 修复发布 · T0r167 源码审计）
 
 ### Fixed

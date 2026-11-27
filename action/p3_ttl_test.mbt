@@ -10,7 +10,7 @@ fn mk_record(
   age_sec : Int64,
   ttl : Int32,
 ) -> @action.ProductRecord {
-  let now = Int64::from_int(@rx.real_now().to_int())
+  let now = @rx.real_now().to_int().to_int64()
   @action.ProductRecord::{
     path,
     created_at_ns: now - age_sec * 1_000_000_000L,
@@ -21,7 +21,7 @@ fn mk_record(
 ///|
 test "expired_records：未到期不命中" {
   @rx.install_real_clock()
-  let now = Int64::from_int(@rx.real_now().to_int())
+  let now = @rx.real_now().to_int().to_int64()
   let tracker : @action.ProductTracker = {
     records: [mk_record("a.tmp", 10L, 60)],
   }
@@ -31,7 +31,7 @@ test "expired_records：未到期不命中" {
 ///|
 test "expired_records：已到期命中" {
   @rx.install_real_clock()
-  let now = Int64::from_int(@rx.real_now().to_int())
+  let now = @rx.real_now().to_int().to_int64()
   let tracker : @action.ProductTracker = {
     records: [mk_record("a.tmp", 120L, 60)],
   }
@@ -44,7 +44,7 @@ test "expired_records：已到期命中" {
 test "expired_records：边界 age == ttl 视为到期" {
   @rx.install_real_clock()
   // 构造 created_at_ns 使 age 恰好等于 ttl（用固定 now 采样避免漂移）
-  let now = Int64::from_int(@rx.real_now().to_int())
+  let now = @rx.real_now().to_int().to_int64()
   let rec : @action.ProductRecord = {
     path: "edge.tmp",
     created_at_ns: now - 60L * 1_000_000_000L,
@@ -57,7 +57,7 @@ test "expired_records：边界 age == ttl 视为到期" {
 ///|
 test "expired_records：ttl<=0 不过期" {
   @rx.install_real_clock()
-  let now = Int64::from_int(@rx.real_now().to_int())
+  let now = @rx.real_now().to_int().to_int64()
   let tracker : @action.ProductTracker = {
     records: [
       mk_record("forever.tmp", 999999L, 0),

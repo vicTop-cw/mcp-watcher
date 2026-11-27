@@ -42,7 +42,7 @@ fn wh_setup(
     _ => @json.Json::string("")
   }
   match j {
-    { "port": Number(p, ..), "pid": Number(pid, ..) } =>
+    { "port": Number(p, ..), "pid": Number(pid, ..), .. } =>
       (true, p.to_int(), pid.to_int())
     _ => (false, 0, 0)
   }

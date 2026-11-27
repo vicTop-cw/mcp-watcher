@@ -211,6 +211,6 @@ test "mcp js e2e: run_action 分支接线（白名单拒绝 + 成功两路）" {
     watch_id="w",
   ) {
     Ok(o) => assert_true(o.ok)
-    Err(e) => assert_true(false)
+    Err(_) => assert_true(false)
   }
 }

@@ -93,13 +93,13 @@ fn parse_int64(s : String) -> Int64? {
   if b.length() == 0 {
     return None
   }
-  var i = 0
-  var neg = false
+  let mut i = 0
+  let mut neg = false
   if b[0] == 45 { // '-'
     neg = true
     i = 1
   }
-  var v = 0L
+  let mut v = 0L
   while i < b.length() {
     let c = b[i]
     if c < 48 || c > 57 {

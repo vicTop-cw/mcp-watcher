@@ -17,7 +17,7 @@ pub fn path_under(base : String, path : String) -> Bool {
   if p.length() <= b.length() {
     return false
   }
-  p.substring(start=0, end=b.length()) == b && p[b.length()] == '/'
+  p[0:b.length()].to_owned() == b && p[b.length()] == '/'
 }
 
 /// 判断是否跳过（walk 与事件补扫共用）
@@ -51,7 +51,7 @@ pub fn should_skip(
   }
   // include 白名单（非空时，path 或 rel 至少命中一个）
   if cfg.include_glob.length() > 0 {
-    var hit = false
+    let mut hit = false
     for pat in cfg.include_glob {
       if glob_match(pat, path) || glob_match(pat, rel) {
         hit = true
@@ -76,19 +76,19 @@ pub fn glob_match(pattern : String, name : String) -> Bool {
 
 fn split_slash(p : String) -> Array[String] {
   let out : Array[String] = []
-  var start = 0
-  var i = 0
+  let mut start = 0
+  let mut i = 0
   while i < p.length() {
     if p[i] == '/' {
       if i > start {
-        out.push(p.substring(start=start, end=i))
+        out.push(p[start:i].to_owned())
       }
       start = i + 1
     }
     i = i + 1
   }
   if start < p.length() {
-    out.push(p.substring(start=start, end=p.length()))
+    out.push(p[start:p.length()].to_owned())
   }
   out
 }
@@ -101,7 +101,7 @@ fn match_globs(ps : Array[String], pi : Int, ss : Array[String], si : Int) -> Bo
   let pat = ps[pi]
   if pat == "**" {
     // ** 匹配零或多个段：尝试跳过 0..n 段
-    var k = si
+    let mut k = si
     while k <= ss.length() {
       if match_globs(ps, pi + 1, ss, k) {
         return true
@@ -131,7 +131,7 @@ fn seg_match(p : String, pi : Int, s : String, si : Int) -> Bool {
   let c = p[pi]
   if c == '*' {
     // * 匹配零或多个字符
-    var k = si
+    let mut k = si
     while k <= s.length() {
       if seg_match(p, pi + 1, s, k) {
         return true

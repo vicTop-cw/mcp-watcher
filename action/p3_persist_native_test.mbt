@@ -8,7 +8,7 @@
 
 ///|
 fn mk_rec(path : String, age_sec : Int64, ttl : Int32) -> @action.ProductRecord {
-  let now = Int64::from_int(@rx.real_now().to_int())
+  let now = @rx.real_now().to_int().to_int64()
   @action.ProductRecord::{
     path,
     created_at_ns: now - age_sec * 1_000_000_000L,

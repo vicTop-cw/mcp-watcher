@@ -61,6 +61,6 @@ test "R3: run_command 策略拒绝走 on_error" {
   }
   let err = Ref::Ref("")
   let obs = @rt.run_command(policy, payload)
-  let _ = obs.subscribe_on_error(fn(e : @rt.ExecError) { err.val = "denied" })
+  let _ = obs.subscribe_on_error(fn(_e : @rt.ExecError) { err.val = "denied" })
   assert_true(err.val != "")
 }

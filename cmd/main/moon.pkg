@@ -7,8 +7,6 @@ import {
   "vicTop-cw/mcp-watcher/index",
   "vicTop-cw/RX-MBT/rx",
   "vicTop-cw/RX-MBT/monitor" @mon,
-  "vicTop-cw/RX-MBT/rhop_task" @rt,
-  "moonbitlang/core/ref",
   "moonbitlang/core/json",
   "moonbitlang/core/string",
   "moonbitlang/core/async",
